@@ -19,6 +19,11 @@ export function NetworkPage() {
 
   const safeConfig = config ?? emptyConfig;
 
+  const applyConfig = (nextConfig: NetworkConfig | null) => {
+    setConfig(nextConfig ?? emptyConfig);
+    setHasSavedConfig(Boolean(nextConfig));
+  };
+
   useEffect(() => {
     loadConfig();
   }, []);
@@ -26,8 +31,7 @@ export function NetworkPage() {
   const loadConfig = async () => {
     try {
       const data = await apiGet<{ config: NetworkConfig | null }>('/api/network/config');
-      setConfig(data.config ?? emptyConfig);
-      setHasSavedConfig(Boolean(data.config));
+      applyConfig(data.config);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -43,8 +47,7 @@ export function NetworkPage() {
         multicast_groups: safeConfig.multicast_groups.filter((group) => group.trim().length > 0),
       };
       const data = await apiPost<{ config: NetworkConfig | null }>('/api/network/config', payload);
-      setConfig(data.config ?? emptyConfig);
-      setHasSavedConfig(Boolean(data.config));
+      applyConfig(data.config);
       setMessage('Network configuration saved');
     } catch (err) {
       setError((err as Error).message);
