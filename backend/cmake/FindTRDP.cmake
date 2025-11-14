@@ -43,13 +43,18 @@ find_package_handle_standard_args(TRDP
 )
 
 if(TRDP_FOUND)
-    add_library(TRDP::trdp STATIC IMPORTED)
-    set_target_properties(TRDP::trdp PROPERTIES
-        IMPORTED_LOCATION "${TRDP_LIBRARY}"
-        INTERFACE_INCLUDE_DIRECTORIES "${TRDP_INCLUDE_DIR}"
-    )
 
-    if(TRDPAP_LIBRARY)
+    # Core TRDP library target
+    if (NOT TARGET TRDP::trdp)
+        add_library(TRDP::trdp STATIC IMPORTED)
+        set_target_properties(TRDP::trdp PROPERTIES
+            IMPORTED_LOCATION "${TRDP_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${TRDP_INCLUDE_DIR}"
+        )
+    endif()
+
+    # Optional AP helper library target
+    if (TRDPAP_LIBRARY AND NOT TARGET TRDP::trdpap)
         add_library(TRDP::trdpap STATIC IMPORTED)
         set_target_properties(TRDP::trdpap PROPERTIES
             IMPORTED_LOCATION "${TRDPAP_LIBRARY}"
@@ -57,4 +62,5 @@ if(TRDP_FOUND)
             INTERFACE_INCLUDE_DIRECTORIES "${TRDP_INCLUDE_DIR}"
         )
     endif()
+
 endif()
