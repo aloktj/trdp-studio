@@ -47,4 +47,8 @@ if(SQLite3_FOUND)
     target_link_libraries(trdp_app PRIVATE SQLite::SQLite3)
 endif()
 
+if(UNIX)
+    target_link_libraries(trdp_app PRIVATE dl)
+endif()
+
 add_compile_definitions(HTTPLIB_USE_POLL=1)
