@@ -2,17 +2,26 @@
 #include <string>
 
 #include "auth/AuthManager.hpp"
+#include "auth/AuthService.hpp"
 #include "db/Database.hpp"
 #include "http/HttpRouter.hpp"
 #include "httplib.h"
+#include "network/NetworkConfigService.hpp"
 #include "trdp/ConfigService.hpp"
+#include "trdp/TrdpConfigService.hpp"
+#include "trdp/TrdpEngine.hpp"
 
 int main() {
     try {
         trdp::db::Database database{"trdp_studio.db"};
-        trdp::auth::AuthManager auth_manager{database};
-        trdp::config::ConfigService config_service{database, auth_manager};
-        trdp::http::HttpRouter router{auth_manager, config_service};
+        trdp::auth::AuthService auth_service{database};
+        auth_service.ensureDefaultUsers();
+        trdp::auth::AuthManager auth_manager{auth_service};
+        trdp::config::TrdpConfigService trdp_config_service{database};
+        trdp::config::ConfigService config_service{auth_manager, trdp_config_service};
+        trdp::network::NetworkConfigService network_config_service{database};
+        trdp::stack::TrdpEngine trdp_engine;
+        trdp::http::HttpRouter router{auth_manager, config_service, network_config_service, trdp_engine};
 
         httplib::Server server;
         router.registerRoutes(server);
