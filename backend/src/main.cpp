@@ -9,6 +9,7 @@
 #include "network/NetworkConfigService.hpp"
 #include "trdp/ConfigService.hpp"
 #include "trdp/TrdpConfigService.hpp"
+#include "trdp/TrdpEngine.hpp"
 
 int main() {
     try {
@@ -19,7 +20,8 @@ int main() {
         trdp::config::TrdpConfigService trdp_config_service{database};
         trdp::config::ConfigService config_service{auth_manager, trdp_config_service};
         trdp::network::NetworkConfigService network_config_service{database};
-        trdp::http::HttpRouter router{auth_manager, config_service, network_config_service};
+        trdp::stack::TrdpEngine trdp_engine;
+        trdp::http::HttpRouter router{auth_manager, config_service, network_config_service, trdp_engine};
 
         httplib::Server server;
         router.registerRoutes(server);

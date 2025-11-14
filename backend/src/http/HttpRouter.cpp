@@ -1,6 +1,7 @@
 #include "http/HttpRouter.hpp"
 
 #include <cctype>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -9,6 +10,7 @@
 #include "httplib.h"
 #include "network/NetworkConfigService.hpp"
 #include "trdp/ConfigService.hpp"
+#include "trdp/TrdpEngine.hpp"
 
 namespace trdp::http {
 
@@ -152,20 +154,93 @@ std::string serializeNetworkConfig(const network::NetworkConfig &config) {
            "\"md_port\":" + std::to_string(config.md_port) + "}";
 }
 
+int hexValue(char ch) {
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'f') {
+        return 10 + (ch - 'a');
+    }
+    if (ch >= 'A' && ch <= 'F') {
+        return 10 + (ch - 'A');
+    }
+    return -1;
+}
+
+std::optional<std::vector<uint8_t>> parseHexString(const std::string &hex) {
+    if (hex.size() % 2 != 0) {
+        return std::nullopt;
+    }
+
+    std::vector<uint8_t> bytes;
+    bytes.reserve(hex.size() / 2);
+    for (size_t i = 0; i < hex.size(); i += 2) {
+        int hi = hexValue(hex[i]);
+        int lo = hexValue(hex[i + 1]);
+        if (hi < 0 || lo < 0) {
+            return std::nullopt;
+        }
+        bytes.push_back(static_cast<uint8_t>((hi << 4) | lo));
+    }
+    return bytes;
+}
+
+std::string bytesToHex(const std::vector<uint8_t> &data) {
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string hex;
+    hex.reserve(data.size() * 2);
+    for (uint8_t byte : data) {
+        hex.push_back(kHex[(byte >> 4) & 0x0F]);
+        hex.push_back(kHex[byte & 0x0F]);
+    }
+    return hex;
+}
+
+std::string serializePdMessage(const stack::PdMessage &message) {
+    return std::string{"{"} + "\"id\":" + std::to_string(message.id) + "," +
+           "\"name\":\"" + escapeJson(message.name) + "\"," +
+           "\"payload_hex\":\"" + bytesToHex(message.payload) + "\"," +
+           "\"timestamp\":\"" + escapeJson(message.timestamp) + "\"}";
+}
+
+std::string serializeMdMessage(const stack::MdMessage &message) {
+    return std::string{"{"} + "\"id\":" + std::to_string(message.id) + "," +
+           "\"source\":\"" + escapeJson(message.source) + "\"," +
+           "\"destination\":\"" + escapeJson(message.destination) + "\"," +
+           "\"payload_hex\":\"" + bytesToHex(message.payload) + "\"," +
+           "\"timestamp\":\"" + escapeJson(message.timestamp) + "\"}";
+}
+
+std::optional<int> extractPathId(const httplib::Request &req) {
+    if (req.matches.size() < 2) {
+        return std::nullopt;
+    }
+
+    try {
+        return std::stoi(req.matches[1]);
+    } catch (const std::exception &) {
+        return std::nullopt;
+    }
+}
+
 std::string jsonError(const std::string &message) {
     return std::string{"{\"error\":\""} + escapeJson(message) + "\"}";
 }
 }  // namespace
 
 HttpRouter::HttpRouter(auth::AuthManager &auth_manager, config::ConfigService &config_service,
-                       network::NetworkConfigService &network_config_service)
-    : auth_manager_(auth_manager), config_service_(config_service), network_config_service_(network_config_service) {}
+                       network::NetworkConfigService &network_config_service, stack::TrdpEngine &trdp_engine)
+    : auth_manager_(auth_manager),
+      config_service_(config_service),
+      network_config_service_(network_config_service),
+      trdp_engine_(trdp_engine) {}
 
 void HttpRouter::registerRoutes(httplib::Server &server) {
     registerHealthEndpoint(server);
     auth_manager_.registerRoutes(server);
     config_service_.registerRoutes(server);
     registerNetworkConfigEndpoints(server);
+    registerTrdpEngineEndpoints(server);
 }
 
 void HttpRouter::registerHealthEndpoint(httplib::Server &server) {
@@ -237,6 +312,150 @@ void HttpRouter::registerNetworkConfigEndpoints(httplib::Server &server) {
             res.status = 500;
             res.set_content(jsonError(ex.what()), "application/json");
         }
+    });
+}
+
+void HttpRouter::registerTrdpEngineEndpoints(httplib::Server &server) {
+    server.Get("/api/pd/outgoing", [this](const httplib::Request &req, httplib::Response &res) {
+        auto user = auth_manager_.userFromRequest(req);
+        if (!user) {
+            res.status = 401;
+            res.set_content(jsonError("authentication required"), "application/json");
+            return;
+        }
+
+        auto messages = trdp_engine_.listOutgoingPd();
+        std::string payload = "{\"messages\":[";
+        for (size_t i = 0; i < messages.size(); ++i) {
+            if (i != 0) {
+                payload += ",";
+            }
+            payload += serializePdMessage(messages[i]);
+        }
+        payload += "]}";
+        res.status = 200;
+        res.set_content(payload, "application/json");
+    });
+
+    server.Get("/api/pd/incoming", [this](const httplib::Request &req, httplib::Response &res) {
+        auto user = auth_manager_.userFromRequest(req);
+        if (!user) {
+            res.status = 401;
+            res.set_content(jsonError("authentication required"), "application/json");
+            return;
+        }
+
+        auto messages = trdp_engine_.listIncomingPd();
+        std::string payload = "{\"messages\":[";
+        for (size_t i = 0; i < messages.size(); ++i) {
+            if (i != 0) {
+                payload += ",";
+            }
+            payload += serializePdMessage(messages[i]);
+        }
+        payload += "]}";
+        res.status = 200;
+        res.set_content(payload, "application/json");
+    });
+
+    server.Post(R"(/api/pd/outgoing/(\d+)/payload)", [this](const httplib::Request &req, httplib::Response &res) {
+        auto user = auth_manager_.userFromRequest(req);
+        if (!user) {
+            res.status = 401;
+            res.set_content(jsonError("authentication required"), "application/json");
+            return;
+        }
+
+        auto msg_id = extractPathId(req);
+        if (!msg_id) {
+            res.status = 400;
+            res.set_content(jsonError("invalid PD message id"), "application/json");
+            return;
+        }
+
+        auto payload_hex = extractJsonStringField(req.body, "payload_hex");
+        if (!payload_hex) {
+            res.status = 400;
+            res.set_content(jsonError("payload_hex is required"), "application/json");
+            return;
+        }
+
+        auto payload_bytes = parseHexString(*payload_hex);
+        if (!payload_bytes) {
+            res.status = 400;
+            res.set_content(jsonError("payload_hex must be an even-length hex string"), "application/json");
+            return;
+        }
+
+        try {
+            trdp_engine_.updateOutgoingPdPayload(*msg_id, *payload_bytes);
+            res.status = 200;
+            res.set_content("{\"status\":\"updated\"}", "application/json");
+        } catch (const std::exception &ex) {
+            std::string message = ex.what();
+            if (message.find("not found") != std::string::npos) {
+                res.status = 404;
+            } else {
+                res.status = 500;
+            }
+            res.set_content(jsonError(message), "application/json");
+        }
+    });
+
+    server.Post("/api/md/send", [this](const httplib::Request &req, httplib::Response &res) {
+        auto user = auth_manager_.userFromRequest(req);
+        if (!user) {
+            res.status = 401;
+            res.set_content(jsonError("authentication required"), "application/json");
+            return;
+        }
+
+        auto destination = extractJsonStringField(req.body, "destination");
+        auto payload_hex = extractJsonStringField(req.body, "payload_hex");
+
+        if (!destination || !payload_hex) {
+            res.status = 400;
+            res.set_content(jsonError("destination and payload_hex are required"), "application/json");
+            return;
+        }
+
+        auto payload_bytes = parseHexString(*payload_hex);
+        if (!payload_bytes) {
+            res.status = 400;
+            res.set_content(jsonError("payload_hex must be an even-length hex string"), "application/json");
+            return;
+        }
+
+        try {
+            auto message = trdp_engine_.sendMdMessage(*destination, *payload_bytes);
+            std::string payload = "{\"message\":" + serializeMdMessage(message) + "}";
+            res.status = 200;
+            res.set_content(payload, "application/json");
+        } catch (const std::exception &ex) {
+            res.status = 500;
+            res.set_content(jsonError(ex.what()), "application/json");
+        }
+    });
+
+    server.Get("/api/md/incoming", [this](const httplib::Request &req, httplib::Response &res) {
+        auto user = auth_manager_.userFromRequest(req);
+        if (!user) {
+            res.status = 401;
+            res.set_content(jsonError("authentication required"), "application/json");
+            return;
+        }
+
+        auto messages = trdp_engine_.listIncomingMd();
+        std::string payload = "{\"messages\":[";
+        for (size_t i = 0; i < messages.size(); ++i) {
+            if (i != 0) {
+                payload += ",";
+            }
+            payload += serializeMdMessage(messages[i]);
+        }
+        payload += "]}";
+        res.status = 200;
+        res.set_content(payload, "application/json");
     });
 }
 
