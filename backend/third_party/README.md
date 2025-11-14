@@ -46,6 +46,26 @@ The `backend/cmake/FindTRDP.cmake` module will discover the headers and librarie
 imported targets (`TRDP::trdp`, `TRDP::trdpap`) so that the rest of the project can link against the
 stack without hard-coding absolute paths.
 
+### Automating the install from CMake
+
+When working on Linux hosts you can let the backend's CMake project bootstrap the TRDP
+dependencies for you. Pass the following cache entries when configuring:
+
+```
+cmake -S backend -B backend/build \
+      -DTRDP_AUTO_SETUP=ON \
+      -DTRDP_SETUP_PREFIX=$HOME/.local/trdp \
+      -DTRDP_PLATFORM_CONFIG=LINUX_X86_64_config
+```
+
+With `TRDP_AUTO_SETUP` enabled the configure step will invoke
+[`third_party/scripts/setup_trdp.sh`](./scripts/setup_trdp.sh) to download the latest
+SourceForge archive, build it with GNU Make, and populate the requested prefix. Afterwards the
+standard `FindTRDP.cmake` logic discovers the freshly installed headers and libraries
+automatically. (You can point `TRDP_PLATFORM_CONFIG` at any of the upstream `*_config` targets if
+you need architectures other than `LINUX_X86_64`.)
+
 See [TRDP_INSTALL_LINUX.md](./TRDP_INSTALL_LINUX.md) for a concrete walkthrough that downloads the
 official SourceForge release on Linux, builds it with the upstream Makefiles, and stages the files in
-the layout above so CMake can detect them automatically.
+the layout above so CMake can detect them automatically. The same document also describes how to run
+`setup_trdp.sh` manually when you prefer to prepare the prefix outside of CMake.

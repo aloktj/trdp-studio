@@ -38,7 +38,9 @@ The default target produces `libtrdp.a` plus a collection of diagnostic binaries
 `bld/output/linux-x86_64-rel/`. (As of release 3.0.0.0 the archive does not provide a separate
 `libtrdpap.a`; only `libtrdp.a` is emitted.)
 
-## 4. Stage the install tree that CMake will discover
+## 4. Stage the install tree that CMake will discover (two options)
+
+### Option A – Manual copy
 
 Choose a prefix (e.g. `/opt/trdp-3.0.0.0` or `$HOME/.local/trdp-3.0.0.0`) and populate it with the
 headers and archive built above:
@@ -53,6 +55,19 @@ sudo cp bld/output/linux-x86_64-rel/libtrdp.a "$TRDP_ROOT/lib/"
 The backend assumes that headers live directly under `include/trdp/` (for example the public
 `trdp_if_light.h`, `tau_dnr.h`, and related API headers that ship with the archive) and that the
 static archives reside in `lib/`.
+
+### Option B – Reuse the helper script
+
+If you prefer automation you can call the same helper script that the CMake integration uses:
+
+```bash
+./backend/third_party/scripts/setup_trdp.sh $HOME/.local/trdp-3.0.0.0 LINUX_X86_64_config
+```
+
+The script downloads the latest SourceForge archive, selects the requested configuration target,
+builds it with GNU Make, and stages the files inside the prefix you provided. Feel free to replace the
+second argument with any of the other `*_config` targets shipped by the TRDP release if you are not
+building for `LINUX_X86_64`.
 
 ## 5. Point CMake at the installation
 
