@@ -202,7 +202,8 @@ void ConfigService::handleActivateConfig(const httplib::Request &req, httplib::R
 
     sqlite3_stmt *stmt = nullptr;
     const char *sql =
-        "INSERT INTO active_config (id, xml_config_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET xml_config_id = excluded.xml_config_id;";
+        "INSERT INTO active_config (id, xml_config_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET xml_config_id = "
+        "excluded.xml_config_id;";
     if (sqlite3_prepare_v2(database_.handle(), sql, -1, &stmt, nullptr) != SQLITE_OK) {
         res.status = 500;
         res.set_content(jsonError("failed to prepare activation"), "application/json");
@@ -224,40 +225,14 @@ void ConfigService::handleActivateConfig(const httplib::Request &req, httplib::R
 }
 
 std::optional<long long> ConfigService::requireUserId(const httplib::Request &req, httplib::Response &res) {
-    auto username = auth_manager_.usernameFromRequest(req);
-    if (!username) {
+    auto user = auth_manager_.userFromRequest(req);
+    if (!user) {
         res.status = 401;
         res.set_content(jsonError("authentication required"), "application/json");
         return std::nullopt;
     }
 
-    auto user_id = userIdForUsername(*username);
-    if (!user_id) {
-        res.status = 401;
-        res.set_content(jsonError("unknown user"), "application/json");
-        return std::nullopt;
-    }
-
-    return user_id;
-}
-
-std::optional<long long> ConfigService::userIdForUsername(const std::string &username) {
-    sqlite3_stmt *stmt = nullptr;
-    const char *sql = "SELECT id FROM users WHERE username = ? LIMIT 1;";
-    if (sqlite3_prepare_v2(database_.handle(), sql, -1, &stmt, nullptr) != SQLITE_OK) {
-        return std::nullopt;
-    }
-
-    sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_TRANSIENT);
-    int rc = sqlite3_step(stmt);
-    if (rc != SQLITE_ROW) {
-        sqlite3_finalize(stmt);
-        return std::nullopt;
-    }
-
-    long long id = sqlite3_column_int64(stmt, 0);
-    sqlite3_finalize(stmt);
-    return id;
+    return user->id;
 }
 
 bool ConfigService::configBelongsToUser(long long config_id, long long user_id) {

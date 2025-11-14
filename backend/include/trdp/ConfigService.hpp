@@ -33,7 +33,6 @@ private:
     void handleActivateConfig(const httplib::Request &req, httplib::Response &res);
 
     std::optional<long long> requireUserId(const httplib::Request &req, httplib::Response &res);
-    std::optional<long long> userIdForUsername(const std::string &username);
     bool configBelongsToUser(long long config_id, long long user_id);
     static std::optional<std::string> extractJsonField(const std::string &body, const std::string &field_name);
     static std::string escapeJson(const std::string &value);
