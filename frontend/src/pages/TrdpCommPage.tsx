@@ -19,13 +19,13 @@ export function TrdpCommPage() {
   const refreshData = async () => {
     try {
       const [pdOut, pdIn, mdIn] = await Promise.all([
-        apiGet<{ messages: PdMessage[] }>('/api/pd/outgoing'),
-        apiGet<{ messages: PdMessage[] }>('/api/pd/incoming'),
-        apiGet<{ messages: MdMessage[] }>('/api/md/incoming'),
+        apiGet<PdMessage[]>('/api/pd/outgoing'),
+        apiGet<PdMessage[]>('/api/pd/incoming'),
+        apiGet<MdMessage[]>('/api/md/incoming'),
       ]);
-      setPdOutgoing(pdOut.messages);
-      setPdIncoming(pdIn.messages);
-      setMdIncoming(mdIn.messages);
+      setPdOutgoing(pdOut);
+      setPdIncoming(pdIn);
+      setMdIncoming(mdIn);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -60,41 +60,50 @@ export function TrdpCommPage() {
     }
   };
 
-  const renderPdTable = (title: string, items: PdMessage[], allowUpdate = false) => (
-    <section className="card">
-      <h2>{title}</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Name</th>
-            <th>Payload</th>
-            <th>Updated</th>
-            {allowUpdate && <th>Actions</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((msg) => (
-            <tr key={msg.id}>
-              <td>{msg.id}</td>
-              <td>{msg.name}</td>
-              <td>
-                <code>{msg.payload_hex}</code>
-              </td>
-              <td>{new Date(msg.updated_at).toLocaleString()}</td>
-              {allowUpdate && (
-                <td>
-                  <button type="button" onClick={() => handleUpdatePayload(msg.id)}>
-                    Update payload
-                  </button>
-                </td>
-              )}
+  const renderPdTable = (title: string, items: PdMessage[] = [], allowUpdate = false) => {
+    const columnCount = allowUpdate ? 5 : 4;
+    return (
+      <section className="card">
+        <h2>{title}</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Name</th>
+              <th>Payload</th>
+              <th>Updated</th>
+              {allowUpdate && <th>Actions</th>}
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
-  );
+          </thead>
+          <tbody>
+            {items.length === 0 ? (
+              <tr>
+                <td colSpan={columnCount}>No messages</td>
+              </tr>
+            ) : (
+              items.map((msg) => (
+                <tr key={msg.id}>
+                  <td>{msg.id}</td>
+                  <td>{msg.name}</td>
+                  <td>
+                    <code>{msg.payload_hex}</code>
+                  </td>
+                  <td>{new Date(msg.updated_at).toLocaleString()}</td>
+                  {allowUpdate && (
+                    <td>
+                      <button type="button" onClick={() => handleUpdatePayload(msg.id)}>
+                        Update payload
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </section>
+    );
+  };
 
   return (
     <div>
@@ -132,16 +141,22 @@ export function TrdpCommPage() {
             </tr>
           </thead>
           <tbody>
-            {mdIncoming.map((msg) => (
-              <tr key={msg.id}>
-                <td>{msg.id}</td>
-                <td>{msg.subject}</td>
-                <td>
-                  <code>{msg.payload_hex}</code>
-                </td>
-                <td>{new Date(msg.timestamp).toLocaleString()}</td>
+            {mdIncoming.length === 0 ? (
+              <tr>
+                <td colSpan={4}>No messages</td>
               </tr>
-            ))}
+            ) : (
+              mdIncoming.map((msg) => (
+                <tr key={msg.id}>
+                  <td>{msg.id}</td>
+                  <td>{msg.subject}</td>
+                  <td>
+                    <code>{msg.payload_hex}</code>
+                  </td>
+                  <td>{new Date(msg.timestamp).toLocaleString()}</td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </section>
