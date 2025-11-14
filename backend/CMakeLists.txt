@@ -19,10 +19,13 @@ FetchContent_MakeAvailable(cpp_httplib)
 set(TRDP_APP_SOURCES
     src/main.cpp
     src/db/Database.cpp
+    src/auth/AuthService.cpp
+    src/auth/PasswordHasher.cpp
     src/auth/AuthManager.cpp
     src/http/HttpRouter.cpp
     src/trdp/TrdpEngine.cpp
     src/trdp/ConfigService.cpp
+    src/trdp/TrdpConfigService.cpp
     src/util/Logger.cpp
 )
 
