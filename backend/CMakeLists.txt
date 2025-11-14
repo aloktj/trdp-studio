@@ -22,6 +22,7 @@ set(TRDP_APP_SOURCES
     src/auth/AuthService.cpp
     src/auth/PasswordHasher.cpp
     src/auth/AuthManager.cpp
+    src/http/JsonUtils.cpp
     src/http/HttpRouter.cpp
     src/trdp/TrdpEngine.cpp
     src/trdp/ConfigService.cpp
@@ -45,6 +46,10 @@ target_include_directories(trdp_app
 
 if(SQLite3_FOUND)
     target_link_libraries(trdp_app PRIVATE SQLite::SQLite3)
+endif()
+
+if(UNIX)
+    target_link_libraries(trdp_app PRIVATE dl)
 endif()
 
 add_compile_definitions(HTTPLIB_USE_POLL=1)

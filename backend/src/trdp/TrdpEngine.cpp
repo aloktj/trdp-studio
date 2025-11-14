@@ -2,107 +2,837 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
+#include <cstring>
 #include <ctime>
+#include <iomanip>
+#include <iostream>
+#include <regex>
+#include <sstream>
 #include <stdexcept>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
-#include "network/NetworkConfigService.hpp"
-#include "trdp/TrdpConfigService.hpp"
+#ifdef __linux__
+#include <dlfcn.h>
+#endif
+
+#include "db/Database.hpp"
+
+namespace {
+
+std::string trimCopy(const std::string &value) {
+    auto begin = value.find_first_not_of(" \t\n\r");
+    if (begin == std::string::npos) {
+        return "";
+    }
+    auto end = value.find_last_not_of(" \t\n\r");
+    return value.substr(begin, end - begin + 1);
+}
+
+std::string toLowerCopy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return value;
+}
+
+int safeStoi(const std::string &value, int fallback = 0) {
+    try {
+        return std::stoi(value);
+    } catch (...) {
+        return fallback;
+    }
+}
+
+struct XmlElement {
+    std::unordered_map<std::string, std::string> attributes;
+    std::string body;
+};
+
+std::unordered_map<std::string, std::string> parseAttributes(const std::string &raw) {
+    std::unordered_map<std::string, std::string> result;
+    static const std::regex attr_regex{R"(([A-Za-z0-9_:\-\.]+)\s*=\s*\"([^\"]*)\")"};
+    auto begin = std::sregex_iterator(raw.begin(), raw.end(), attr_regex);
+    auto end = std::sregex_iterator();
+    for (auto it = begin; it != end; ++it) {
+        result[it->str(1)] = it->str(2);
+    }
+    return result;
+}
+
+std::vector<XmlElement> extractElements(const std::string &xml, const std::string &tag) {
+    std::vector<XmlElement> elements;
+    const std::string open = "<" + tag;
+    const std::string close = "</" + tag + ">";
+    std::size_t pos = 0;
+    while ((pos = xml.find(open, pos)) != std::string::npos) {
+        const std::size_t head_start = pos + open.size();
+        std::size_t closing = xml.find('>', head_start);
+        if (closing == std::string::npos) {
+            break;
+        }
+        bool self_closing = closing > head_start && xml[closing - 1] == '/';
+        std::string attr_segment = xml.substr(head_start, closing - head_start);
+        if (self_closing && !attr_segment.empty()) {
+            attr_segment.pop_back();
+        }
+        XmlElement element;
+        element.attributes = parseAttributes(attr_segment);
+        if (!self_closing) {
+            auto close_pos = xml.find(close, closing + 1);
+            if (close_pos == std::string::npos) {
+                break;
+            }
+            element.body = xml.substr(closing + 1, close_pos - (closing + 1));
+            pos = close_pos + close.size();
+        } else {
+            pos = closing + 1;
+        }
+        elements.push_back(std::move(element));
+    }
+    return elements;
+}
+
+std::vector<uint8_t> parseHexPayload(const std::string &raw) {
+    std::string filtered;
+    filtered.reserve(raw.size());
+    for (char ch : raw) {
+        if (std::isxdigit(static_cast<unsigned char>(ch))) {
+            filtered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+        }
+    }
+    if (filtered.empty()) {
+        return {};
+    }
+    if (filtered.size() % 2 != 0U) {
+        filtered.insert(filtered.begin(), '0');
+    }
+    std::vector<uint8_t> payload;
+    payload.reserve(filtered.size() / 2);
+    for (std::size_t i = 0; i < filtered.size(); i += 2) {
+        auto byte_str = filtered.substr(i, 2);
+        uint8_t value = static_cast<uint8_t>(std::stoi(byte_str, nullptr, 16));
+        payload.push_back(value);
+    }
+    return payload;
+}
+
+}  // namespace
 
 namespace trdp::stack {
 
-TrdpEngine::TrdpEngine() { seedDemoDataIfNeeded(); }
+struct TrdpEngine::PdRuntimeState {
+    TrdpEngine *engine {nullptr};
+    int id {0};
+    std::string name;
+    bool is_outgoing {true};
+    int cycle_ms {0};
+    std::string destination;
+    std::string source;
+    std::vector<uint8_t> payload;
+    std::chrono::steady_clock::time_point next_cycle;
+    void *native_handle {nullptr};
+};
+
+struct TrdpEngine::MdRuntimeState {
+    TrdpEngine *engine {nullptr};
+    int runtime_id {0};
+    int last_message_id {0};
+    std::string name;
+    std::string source;
+    std::string destination;
+    std::vector<uint8_t> last_payload;
+    void *native_handle {nullptr};
+};
+
+class TrdpEngine::TrdpStackAdapter {
+public:
+    explicit TrdpStackAdapter(TrdpEngine &engine) : engine_(engine) {}
+    ~TrdpStackAdapter() { shutdown(); }
+
+    bool initialize(const network::NetworkConfig &cfg) {
+        network_cfg_ = cfg;
+#ifdef __linux__
+        native_available_ = loadNativeLibrary();
+#else
+        native_available_ = false;
+#endif
+        if (native_available_) {
+            if (!initializeNativeSession(cfg)) {
+                native_available_ = false;
+            }
+        }
+        ready_ = true;
+        return true;
+    }
+
+    void shutdown() {
+        if (!ready_) {
+            return;
+        }
+        if (native_available_) {
+            shutdownNativeSession();
+        }
+        unloadNativeLibrary();
+        ready_ = false;
+    }
+
+    bool registerPublisher(PdRuntimeState &state) {
+        if (native_available_) {
+            // TODO: wire exact TRDP function names for PD publish configuration.
+            if (tlc_pdPublish_ != nullptr && native_session_ != nullptr) {
+                tlc_pdPublish_(native_session_, &state.native_handle, state.destination.c_str(), state.cycle_ms,
+                               &state, &TrdpEngine::pdCallbackBridge);
+            }
+        }
+        return true;
+    }
+
+    bool registerSubscriber(PdRuntimeState &state) {
+        if (native_available_) {
+            // TODO: wire exact TRDP function names for PD subscribe configuration.
+            if (tlc_pdSubscribe_ != nullptr && native_session_ != nullptr) {
+                tlc_pdSubscribe_(native_session_, &state.native_handle, state.source.c_str(), &state,
+                                  &TrdpEngine::pdCallbackBridge);
+            }
+        }
+        return true;
+    }
+
+    bool registerMdEndpoint(MdRuntimeState &state) {
+        if (native_available_) {
+            // TODO: wire exact TRDP function names for MD registration/subscription.
+            if (tlc_mdSubscribe_ != nullptr && native_session_ != nullptr) {
+                tlc_mdSubscribe_(native_session_, &state.native_handle, state.destination.c_str(), &state,
+                                 &TrdpEngine::mdCallbackBridge);
+            }
+        }
+        return true;
+    }
+
+    bool sendPd(PdRuntimeState &state, const std::vector<uint8_t> &payload) {
+        state.payload = payload;
+        if (native_available_) {
+            // TODO: wire exact TRDP function names for PD transmission.
+            if (tlc_pdSend_ != nullptr && native_session_ != nullptr && state.native_handle != nullptr) {
+                return tlc_pdSend_(native_session_, state.native_handle, payload.data(), payload.size()) == 0;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    bool sendMd(MdRuntimeState &state, const std::vector<uint8_t> &payload, int message_id) {
+        state.last_payload = payload;
+        state.last_message_id = message_id;
+        if (native_available_) {
+            // TODO: wire exact TRDP function names for MD transmission.
+            if (tlc_mdSend_ != nullptr && native_session_ != nullptr && state.native_handle != nullptr) {
+                return tlc_mdSend_(native_session_, state.native_handle, payload.data(), payload.size(), &state,
+                                   &TrdpEngine::mdCallbackBridge) == 0;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    bool iterate() {
+        if (native_available_) {
+            // TODO: wire exact TRDP function names for TRDP event processing.
+            if (tlc_process_ != nullptr && native_session_ != nullptr) {
+                return tlc_process_(native_session_) == 0;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    bool ready() const { return ready_; }
+
+private:
+#ifdef __linux__
+    using InitFn = int (*)(void **, const char *, const char *);        // TODO: wire exact TRDP function names.
+    using TermFn = int (*)(void *);                                     // TODO: wire exact TRDP function names.
+    using ProcessFn = int (*)(void *);                                  // TODO: wire exact TRDP function names.
+    using PdPublishFn = int (*)(void *, void **, const char *, int, void *,
+                                void (*)(void *, const uint8_t *, uint32_t, const char *, const char *));
+    using PdSubscribeFn = int (*)(void *, void **, const char *, void *,
+                                  void (*)(void *, const uint8_t *, uint32_t, const char *, const char *));
+    using PdSendFn = int (*)(void *, void *, const uint8_t *, std::size_t);
+    using MdSendFn = int (*)(void *, void *, const uint8_t *, std::size_t, void *,
+                             void (*)(void *, const uint8_t *, uint32_t, const char *, const char *));
+    using MdSubscribeFn = int (*)(void *, void **, const char *, void *,
+                                  void (*)(void *, const uint8_t *, uint32_t, const char *, const char *));
+#endif
+
+    bool loadNativeLibrary() {
+#ifdef __linux__
+        if (library_handle_ != nullptr) {
+            return true;
+        }
+        library_handle_ = dlopen("libtrdp.so", RTLD_LAZY);
+        if (library_handle_ == nullptr) {
+            std::cerr << "TRDP native library not found; continuing in simulation mode." << std::endl;
+            return false;
+        }
+        tlc_init_ = reinterpret_cast<InitFn>(dlsym(library_handle_, "tlc_init"));  // TODO: confirm name.
+        tlc_terminate_ = reinterpret_cast<TermFn>(dlsym(library_handle_, "tlc_terminate"));
+        tlc_process_ = reinterpret_cast<ProcessFn>(dlsym(library_handle_, "tlc_process"));
+        tlc_pdPublish_ = reinterpret_cast<PdPublishFn>(dlsym(library_handle_, "tlc_pdPublish"));
+        tlc_pdSubscribe_ = reinterpret_cast<PdSubscribeFn>(dlsym(library_handle_, "tlc_pdSubscribe"));
+        tlc_pdSend_ = reinterpret_cast<PdSendFn>(dlsym(library_handle_, "tlc_pdSend"));
+        tlc_mdSend_ = reinterpret_cast<MdSendFn>(dlsym(library_handle_, "tlc_mdSend"));
+        tlc_mdSubscribe_ = reinterpret_cast<MdSubscribeFn>(dlsym(library_handle_, "tlc_mdSubscribe"));
+        return tlc_init_ != nullptr && tlc_terminate_ != nullptr && tlc_process_ != nullptr;
+#else
+        return false;
+#endif
+    }
+
+    void unloadNativeLibrary() {
+#ifdef __linux__
+        if (library_handle_ != nullptr) {
+            dlclose(library_handle_);
+            library_handle_ = nullptr;
+        }
+        tlc_init_ = nullptr;
+        tlc_terminate_ = nullptr;
+        tlc_process_ = nullptr;
+        tlc_pdPublish_ = nullptr;
+        tlc_pdSubscribe_ = nullptr;
+        tlc_pdSend_ = nullptr;
+        tlc_mdSend_ = nullptr;
+        tlc_mdSubscribe_ = nullptr;
+#endif
+    }
+
+    bool initializeNativeSession(const network::NetworkConfig &cfg) {
+#ifdef __linux__
+        if (tlc_init_ == nullptr) {
+            return false;
+        }
+        return tlc_init_(&native_session_, cfg.interface_name.c_str(), cfg.local_ip.c_str()) == 0;
+#else
+        (void)cfg;
+        return false;
+#endif
+    }
+
+    void shutdownNativeSession() {
+#ifdef __linux__
+        if (native_session_ != nullptr && tlc_terminate_ != nullptr) {
+            tlc_terminate_(native_session_);
+            native_session_ = nullptr;
+        }
+#endif
+    }
+
+    TrdpEngine &engine_;
+    network::NetworkConfig network_cfg_;
+#ifdef __linux__
+    void *library_handle_ {nullptr};
+    InitFn tlc_init_ {nullptr};
+    TermFn tlc_terminate_ {nullptr};
+    ProcessFn tlc_process_ {nullptr};
+    PdPublishFn tlc_pdPublish_ {nullptr};
+    PdSubscribeFn tlc_pdSubscribe_ {nullptr};
+    PdSendFn tlc_pdSend_ {nullptr};
+    MdSendFn tlc_mdSend_ {nullptr};
+    MdSubscribeFn tlc_mdSubscribe_ {nullptr};
+#endif
+    void *native_session_ {nullptr};
+    bool native_available_ {false};
+    bool ready_ {false};
+};
+
+TrdpEngine::TrdpEngine(db::Database *database) : database_(database) {}
+
+TrdpEngine::~TrdpEngine() {
+    stop();
+    std::lock_guard<std::mutex> lock(engine_mutex_);
+    teardownStackLocked();
+}
 
 bool TrdpEngine::loadConfiguration(const config::TrdpConfig &config, const network::NetworkConfig &net_cfg) {
+    std::lock_guard<std::mutex> lock(engine_mutex_);
+    if (running_) {
+        stopWorker();
+        running_ = false;
+    }
+    teardownStackLocked();
     loaded_config_ = config;
     network_config_ = net_cfg;
-    // TODO: Wire up the actual TRDP stack initialization when the vendor library is available.
-    return true;
+    rebuildStateFromConfig(config.xml_content);
+    if (!stack_adapter_) {
+        stack_adapter_ = std::make_unique<TrdpStackAdapter>(*this);
+    }
+    stack_ready_ = initializeStackLocked(net_cfg);
+    return stack_ready_.load();
 }
 
 void TrdpEngine::start() {
+    std::lock_guard<std::mutex> lock(engine_mutex_);
+    if (running_) {
+        return;
+    }
+    if (!loaded_config_.has_value() || !network_config_.has_value()) {
+        throw std::runtime_error("TRDP configuration not loaded");
+    }
+    if (!stack_adapter_) {
+        stack_adapter_ = std::make_unique<TrdpStackAdapter>(*this);
+    }
+    if (!stack_ready_.load()) {
+        stack_ready_ = initializeStackLocked(*network_config_);
+    }
+    if (!stack_ready_.load()) {
+        throw std::runtime_error("Failed to initialize TRDP stack");
+    }
     running_ = true;
-    // TODO: Kick off PD/MD communication threads once the TRDP engine is integrated.
+    stop_worker_ = false;
+    ensureWorker();
 }
 
 void TrdpEngine::stop() {
+    std::unique_lock<std::mutex> lock(engine_mutex_);
+    if (!running_) {
+        return;
+    }
     running_ = false;
-    // TODO: Gracefully stop PD/MD communication threads.
+    stop_worker_ = true;
+    lock.unlock();
+    stopWorker();
+    lock.lock();
+    teardownStackLocked();
+    stack_ready_ = false;
 }
 
-std::vector<PdMessage> TrdpEngine::listOutgoingPd() const { return outgoing_pd_; }
+std::vector<PdMessage> TrdpEngine::listOutgoingPd() const {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return outgoing_pd_;
+}
 
-std::vector<PdMessage> TrdpEngine::listIncomingPd() const { return incoming_pd_; }
+std::vector<PdMessage> TrdpEngine::listIncomingPd() const {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return incoming_pd_;
+}
 
 void TrdpEngine::updateOutgoingPdPayload(int msg_id, const std::vector<uint8_t> &payload) {
-    auto it = std::find_if(outgoing_pd_.begin(), outgoing_pd_.end(), [msg_id](const PdMessage &msg) {
-        return msg.id == msg_id;
-    });
-
-    if (it == outgoing_pd_.end()) {
-        throw std::runtime_error("PD message not found");
+    std::shared_ptr<PdRuntimeState> runtime;
+    std::string src_ip;
+    std::string dst_ip;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        auto idx = outgoing_pd_index_.find(msg_id);
+        if (idx == outgoing_pd_index_.end()) {
+            throw std::runtime_error("PD message not found");
+        }
+        auto &msg = outgoing_pd_[idx->second];
+        msg.payload = payload;
+        msg.timestamp = nowIso8601();
+        auto runtime_it = pd_runtime_.find(msg_id);
+        if (runtime_it == pd_runtime_.end()) {
+            throw std::runtime_error("Runtime PD state missing");
+        }
+        runtime = runtime_it->second;
+        runtime->payload = payload;
+        runtime->next_cycle = std::chrono::steady_clock::now();
+        src_ip = extractIp(runtime->source);
+        dst_ip = extractIp(runtime->destination);
     }
-
-    it->payload = payload;
-    it->timestamp = nowIso8601();
+    if (stack_ready_.load() && stack_adapter_ && runtime) {
+        stack_adapter_->sendPd(*runtime, payload);
+    }
+    if (!src_ip.empty() || !dst_ip.empty()) {
+        logTrdpEvent("OUT", "PD", msg_id, src_ip, dst_ip, payload);
+    }
 }
 
-std::vector<MdMessage> TrdpEngine::listOutgoingMd() const { return outgoing_md_; }
+std::vector<MdMessage> TrdpEngine::listOutgoingMd() const {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return outgoing_md_;
+}
 
-std::vector<MdMessage> TrdpEngine::listIncomingMd() const { return incoming_md_; }
+std::vector<MdMessage> TrdpEngine::listIncomingMd() const {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return incoming_md_;
+}
 
 MdMessage TrdpEngine::sendMdMessage(const std::string &destination, const std::vector<uint8_t> &payload) {
-    MdMessage message;
-    message.id = next_md_id_++;
-    message.source = "UI";
-    message.destination = destination;
-    message.payload = payload;
-    message.timestamp = nowIso8601();
+    return sendMdMessage(destination, 0, payload);
+}
 
-    outgoing_md_.push_back(message);
+MdMessage TrdpEngine::sendMdMessage(const std::string &destination, int msg_id,
+                                    const std::vector<uint8_t> &payload) {
+    if (!network_config_.has_value()) {
+        throw std::runtime_error("Network configuration not loaded");
+    }
+    MdMessage message;
+    std::shared_ptr<MdRuntimeState> runtime;
+    bool requires_registration = false;
+    auto target = sanitizeEndpoint(destination);
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        for (auto &entry : md_runtime_) {
+            if (entry.second && sanitizeEndpoint(entry.second->destination) == target) {
+                runtime = entry.second;
+                break;
+            }
+        }
+        if (!runtime) {
+            runtime = std::make_shared<MdRuntimeState>();
+            runtime->engine = this;
+            runtime->runtime_id = next_md_runtime_id_++;
+            runtime->name = "runtime-" + std::to_string(runtime->runtime_id);
+            runtime->destination = target;
+            runtime->source = sanitizeEndpoint(network_config_->local_ip + ":" +
+                                               std::to_string(network_config_->md_port));
+            md_runtime_[runtime->runtime_id] = runtime;
+            requires_registration = true;
+        }
+        runtime->last_payload = payload;
+        message.id = next_md_id_++;
+        if (msg_id <= 0) {
+            msg_id = next_md_msg_id_++;
+        }
+        message.msg_id = msg_id;
+        runtime->last_message_id = message.msg_id;
+        message.source = runtime->source;
+        message.destination = runtime->destination;
+        message.payload = payload;
+        message.timestamp = nowIso8601();
+        outgoing_md_index_[message.id] = outgoing_md_.size();
+        outgoing_md_.push_back(message);
+    }
+    if (!runtime) {
+        throw std::runtime_error("Failed to allocate MD runtime state");
+    }
+    if (requires_registration && stack_ready_.load() && stack_adapter_) {
+        stack_adapter_->registerMdEndpoint(*runtime);
+    }
+    if (stack_ready_.load() && stack_adapter_) {
+        stack_adapter_->sendMd(*runtime, payload, message.msg_id);
+    }
+    logTrdpEvent("OUT", "MD", message.msg_id, extractIp(runtime->source), extractIp(runtime->destination),
+                 payload);
     return message;
 }
 
-void TrdpEngine::seedDemoDataIfNeeded() {
-    if (!outgoing_pd_.empty() || !incoming_pd_.empty()) {
+bool TrdpEngine::initializeStackLocked(const network::NetworkConfig &net_cfg) {
+    if (!stack_adapter_) {
+        stack_adapter_ = std::make_unique<TrdpStackAdapter>(*this);
+    }
+    if (!stack_adapter_->initialize(net_cfg)) {
+        return false;
+    }
+    for (auto &entry : pd_runtime_) {
+        auto &state = *entry.second;
+        if (state.is_outgoing) {
+            stack_adapter_->registerPublisher(state);
+        } else {
+            stack_adapter_->registerSubscriber(state);
+        }
+    }
+    for (auto &entry : md_runtime_) {
+        stack_adapter_->registerMdEndpoint(*entry.second);
+    }
+    return stack_adapter_->ready();
+}
+
+void TrdpEngine::teardownStackLocked() {
+    if (stack_adapter_) {
+        stack_adapter_->shutdown();
+    }
+    stack_ready_ = false;
+}
+
+void TrdpEngine::rebuildStateFromConfig(const std::string &xml_content) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    clearAllStateLocked();
+    const auto pd_elements = extractElements(xml_content, "pd");
+    for (const auto &element : pd_elements) {
+        PdMessage message;
+        message.id = next_pd_id_++;
+        auto it_name = element.attributes.find("name");
+        message.name = it_name != element.attributes.end() ? it_name->second : "PD-" + std::to_string(message.id);
+        auto it_cycle = element.attributes.find("cycle");
+        message.cycle_time_ms = it_cycle != element.attributes.end() ? safeStoi(it_cycle->second) : 0;
+        std::string payload_str;
+        if (auto attr_payload = element.attributes.find("payload"); attr_payload != element.attributes.end()) {
+            payload_str = attr_payload->second;
+        } else {
+            payload_str = element.body;
+        }
+        message.payload = parseHexPayload(payload_str);
+        message.timestamp = nowIso8601();
+        std::string direction = "outgoing";
+        if (auto dir_attr = element.attributes.find("direction"); dir_attr != element.attributes.end()) {
+            direction = toLowerCopy(dir_attr->second);
+        }
+        bool is_outgoing = direction != "in" && direction != "incoming" && direction != "subscriber";
+        auto runtime = std::make_shared<PdRuntimeState>();
+        runtime->engine = this;
+        runtime->id = message.id;
+        runtime->name = message.name;
+        runtime->is_outgoing = is_outgoing;
+        runtime->cycle_ms = message.cycle_time_ms;
+        runtime->payload = message.payload;
+        runtime->next_cycle = std::chrono::steady_clock::now();
+        if (auto dst = element.attributes.find("destination"); dst != element.attributes.end()) {
+            runtime->destination = sanitizeEndpoint(dst->second);
+        }
+        if (runtime->destination.empty() && network_config_) {
+            runtime->destination = network_config_->local_ip + ":" + std::to_string(network_config_->pd_port);
+        }
+        if (auto src = element.attributes.find("source"); src != element.attributes.end()) {
+            runtime->source = sanitizeEndpoint(src->second);
+        }
+        if (runtime->source.empty() && network_config_) {
+            runtime->source = network_config_->local_ip + ":" + std::to_string(network_config_->pd_port);
+        }
+        pd_runtime_[message.id] = runtime;
+        if (is_outgoing) {
+            outgoing_pd_index_[message.id] = outgoing_pd_.size();
+            outgoing_pd_.push_back(message);
+        } else {
+            incoming_pd_index_[message.id] = incoming_pd_.size();
+            incoming_pd_.push_back(message);
+        }
+    }
+    const auto md_elements = extractElements(xml_content, "md");
+    for (const auto &element : md_elements) {
+        auto runtime = std::make_shared<MdRuntimeState>();
+        runtime->engine = this;
+        runtime->runtime_id = next_md_runtime_id_++;
+        if (auto name_attr = element.attributes.find("name"); name_attr != element.attributes.end()) {
+            runtime->name = name_attr->second;
+        }
+        if (auto dst = element.attributes.find("destination"); dst != element.attributes.end()) {
+            runtime->destination = sanitizeEndpoint(dst->second);
+        }
+        if (runtime->destination.empty() && network_config_) {
+            runtime->destination = network_config_->local_ip + ":" + std::to_string(network_config_->md_port);
+        }
+        if (auto src = element.attributes.find("source"); src != element.attributes.end()) {
+            runtime->source = sanitizeEndpoint(src->second);
+        }
+        if (runtime->source.empty() && network_config_) {
+            runtime->source = network_config_->local_ip + ":" + std::to_string(network_config_->md_port);
+        }
+        md_runtime_[runtime->runtime_id] = runtime;
+    }
+}
+
+void TrdpEngine::runEventLoop() {
+    while (!stop_worker_.load()) {
+        std::vector<std::shared_ptr<PdRuntimeState>> due;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            const auto now = std::chrono::steady_clock::now();
+            for (auto &entry : pd_runtime_) {
+                auto &state = *entry.second;
+                if (!state.is_outgoing || state.cycle_ms <= 0) {
+                    continue;
+                }
+                if (now >= state.next_cycle) {
+                    due.push_back(entry.second);
+                    scheduleNextCycle(state);
+                }
+            }
+        }
+        for (const auto &state_ptr : due) {
+            if (!stack_ready_.load() || !stack_adapter_) {
+                continue;
+            }
+            stack_adapter_->sendPd(*state_ptr, state_ptr->payload);
+            logTrdpEvent("OUT", "PD", state_ptr->id, extractIp(state_ptr->source),
+                         extractIp(state_ptr->destination), state_ptr->payload);
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            auto idx = outgoing_pd_index_.find(state_ptr->id);
+            if (idx != outgoing_pd_index_.end()) {
+                outgoing_pd_[idx->second].timestamp = nowIso8601();
+            }
+        }
+        if (stack_ready_.load() && stack_adapter_) {
+            stack_adapter_->iterate();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
+void TrdpEngine::scheduleNextCycle(PdRuntimeState &state) {
+    if (state.cycle_ms <= 0) {
+        state.next_cycle = std::chrono::steady_clock::now() + std::chrono::hours(24);
         return;
     }
+    state.next_cycle = std::chrono::steady_clock::now() + std::chrono::milliseconds(state.cycle_ms);
+}
 
-    PdMessage speed;
-    speed.id = next_pd_id_++;
-    speed.name = "TrainSpeed";
-    speed.payload = {0x00, 0x2A};
-    speed.timestamp = nowIso8601();
+void TrdpEngine::handleIncomingPd(int msg_id, const std::vector<uint8_t> &payload, const std::string &src_ip,
+                                  const std::string &dst_ip) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    auto idx = incoming_pd_index_.find(msg_id);
+    if (idx == incoming_pd_index_.end()) {
+        PdMessage msg;
+        msg.id = msg_id;
+        msg.name = "PD-" + std::to_string(msg_id);
+        msg.payload = payload;
+        msg.timestamp = nowIso8601();
+        incoming_pd_index_[msg_id] = incoming_pd_.size();
+        incoming_pd_.push_back(msg);
+    } else {
+        auto &msg = incoming_pd_[idx->second];
+        msg.payload = payload;
+        msg.timestamp = nowIso8601();
+    }
+    logTrdpEvent("IN", "PD", msg_id, src_ip, dst_ip, payload);
+}
 
-    PdMessage temp;
-    temp.id = next_pd_id_++;
-    temp.name = "CoachTemperature";
-    temp.payload = {0x00, 0x19};
-    temp.timestamp = nowIso8601();
+void TrdpEngine::handleIncomingMd(int msg_id, const std::vector<uint8_t> &payload, const std::string &src_ip,
+                                  const std::string &dst_ip) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    MdMessage message;
+    message.id = next_md_id_++;
+    if (msg_id <= 0) {
+        msg_id = next_md_msg_id_++;
+    }
+    message.msg_id = msg_id;
+    message.source = src_ip;
+    message.destination = dst_ip;
+    message.payload = payload;
+    message.timestamp = nowIso8601();
+    incoming_md_index_[message.id] = incoming_md_.size();
+    incoming_md_.push_back(message);
+    logTrdpEvent("IN", "MD", message.msg_id, src_ip, dst_ip, payload);
+}
 
-    outgoing_pd_.push_back(speed);
-    outgoing_pd_.push_back(temp);
+void TrdpEngine::logTrdpEvent(const std::string &direction, const std::string &type, int msg_id,
+                              const std::string &src_ip, const std::string &dst_ip,
+                              const std::vector<uint8_t> &payload) {
+    if (database_ == nullptr) {
+        return;
+    }
+    auto *db = database_->handle();
+    if (db == nullptr) {
+        return;
+    }
+    sqlite3_stmt *stmt = nullptr;
+    const char *sql =
+        "INSERT INTO trdp_logs (direction, type, msg_id, src_ip, dst_ip, payload) VALUES (?, ?, ?, ?, ?, ?);";
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return;
+    }
+    sqlite3_bind_text(stmt, 1, direction.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 3, msg_id);
+    sqlite3_bind_text(stmt, 4, src_ip.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 5, dst_ip.c_str(), -1, SQLITE_TRANSIENT);
+    if (!payload.empty()) {
+        sqlite3_bind_blob(stmt, 6, payload.data(), static_cast<int>(payload.size()), SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(stmt, 6);
+    }
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
 
-    PdMessage incoming;
-    incoming.id = next_pd_id_++;
-    incoming.name = "BrakeStatus";
-    incoming.payload = {0x01, 0x00};
-    incoming.timestamp = nowIso8601();
+std::string TrdpEngine::sanitizeEndpoint(const std::string &endpoint) {
+    return trimCopy(endpoint);
+}
 
-    incoming_pd_.push_back(incoming);
+std::string TrdpEngine::extractIp(const std::string &endpoint) {
+    auto cleaned = trimCopy(endpoint);
+    auto pos = cleaned.find(':');
+    if (pos == std::string::npos) {
+        return cleaned;
+    }
+    return cleaned.substr(0, pos);
+}
 
-    MdMessage alarm;
-    alarm.id = next_md_id_++;
-    alarm.source = "TrainControl";
-    alarm.destination = "UI";
-    alarm.payload = {0xDE, 0xAD, 0xBE, 0xEF};
-    alarm.timestamp = nowIso8601();
-    incoming_md_.push_back(alarm);
+uint16_t TrdpEngine::extractPort(const std::string &endpoint, uint16_t fallback) {
+    auto cleaned = trimCopy(endpoint);
+    auto pos = cleaned.find(':');
+    if (pos == std::string::npos) {
+        return fallback;
+    }
+    auto port_str = cleaned.substr(pos + 1);
+    if (port_str.empty()) {
+        return fallback;
+    }
+    return static_cast<uint16_t>(safeStoi(port_str, fallback));
+}
+
+void TrdpEngine::ensureWorker() {
+    if (worker_thread_.joinable()) {
+        return;
+    }
+    worker_thread_ = std::thread(&TrdpEngine::runEventLoop, this);
+}
+
+void TrdpEngine::stopWorker() {
+    stop_worker_ = true;
+    if (worker_thread_.joinable()) {
+        worker_thread_.join();
+    }
+}
+
+void TrdpEngine::clearAllStateLocked() {
+    outgoing_pd_.clear();
+    incoming_pd_.clear();
+    outgoing_md_.clear();
+    incoming_md_.clear();
+    outgoing_pd_index_.clear();
+    incoming_pd_index_.clear();
+    outgoing_md_index_.clear();
+    incoming_md_index_.clear();
+    pd_runtime_.clear();
+    md_runtime_.clear();
+    next_pd_id_ = 1;
+    next_md_id_ = 1;
+    next_md_msg_id_ = 1;
+    next_md_runtime_id_ = 1;
+}
+
+void TrdpEngine::pdCallbackBridge(void *ref_con, const uint8_t *payload, uint32_t size, const char *src_ip,
+                                  const char *dst_ip) {
+    if (ref_con == nullptr) {
+        return;
+    }
+    auto *state = static_cast<PdRuntimeState *>(ref_con);
+    std::vector<uint8_t> buffer;
+    if (payload != nullptr && size > 0U) {
+        buffer.assign(payload, payload + size);
+    }
+    std::string src = src_ip != nullptr ? src_ip : "";
+    std::string dst = dst_ip != nullptr ? dst_ip : "";
+    state->engine->handleIncomingPd(state->id, buffer, src, dst);
+}
+
+void TrdpEngine::mdCallbackBridge(void *ref_con, const uint8_t *payload, uint32_t size, const char *src_ip,
+                                  const char *dst_ip) {
+    if (ref_con == nullptr) {
+        return;
+    }
+    auto *state = static_cast<MdRuntimeState *>(ref_con);
+    std::vector<uint8_t> buffer;
+    if (payload != nullptr && size > 0U) {
+        buffer.assign(payload, payload + size);
+    }
+    std::string src = src_ip != nullptr ? src_ip : "";
+    std::string dst = dst_ip != nullptr ? dst_ip : "";
+    state->engine->handleIncomingMd(state->last_message_id, buffer, src, dst);
 }
 
 std::string TrdpEngine::nowIso8601() {
     auto now = std::chrono::system_clock::now();
-    std::time_t time = std::chrono::system_clock::to_time_t(now);
-    std::tm tm = *std::gmtime(&time);
+    auto tt = std::chrono::system_clock::to_time_t(now);
+    std::tm tm;
+#ifdef _WIN32
+    gmtime_s(&tm, &tt);
+#else
+    gmtime_r(&tt, &tm);
+#endif
     char buffer[32];
     std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &tm);
     return buffer;
