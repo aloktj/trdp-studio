@@ -26,6 +26,7 @@ set(TRDP_APP_SOURCES
     src/trdp/TrdpEngine.cpp
     src/trdp/ConfigService.cpp
     src/trdp/TrdpConfigService.cpp
+    src/network/NetworkConfigService.cpp
     src/util/Logger.cpp
 )
 
