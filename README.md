@@ -493,6 +493,35 @@ Reference specific parts of this README
 
 ---
 
+🗂️ Languages, Tooling, and Git Hygiene
+
+This repository intentionally mixes several ecosystems, so the `.gitignore` (checked in at the
+root of the repo) is tuned to keep transient files from each toolchain out of future pull
+requests. The major languages and generators we rely on today are:
+
+* **C & C++** – the backend, TRDP integration, and CMake-based build glue. Ignore object files
+  (`*.o`, `*.obj`), archives (`*.a`, `*.lib`), shared libraries (`*.so`, `*.dll`, `*.dylib`),
+  and entire CMake build directories (`build/`, `cmake-build-*`, `CMakeFiles/`).
+* **CMake** – project orchestration for both `trdp_app` and the `TCNopen` submodule. Ignore
+  generated presets (`CMakeUserPresets.json`), caches (`CMakeCache.txt`), helper metadata such
+  as `compile_commands.json`, and the `external/TCNopen/build/` tree that hosts preset builds.
+* **TypeScript / JavaScript (React)** – the web frontend. Ignore `node_modules/`, bundler output
+  like `build/` or `dist/`, coverage folders, lockfiles, and framework-specific caches (`.next/`,
+  `.vite/`, `.svelte-kit/`).
+* **SQLite databases & runtime logs** – the backend creates `*.db`, WAL, and log files; they must
+  never be committed.
+* **Docs & packaging artifacts** – Doxygen output, Debian packages from the TRDP stack, or any
+  ad-hoc archives should stay ignored (`/docs/`, `*.deb`, `*.tar.gz`, etc.).
+* **Editor/tool state** – IDE folders (`.vscode/`, `.idea/`), `clangd` cache, swap files, and
+  `.env` secrets are all excluded.
+
+If you add another language or framework (for example Python helper scripts or a new frontend
+stack), extend `.gitignore` alongside the code so that only human-authored sources enter the
+history.
+
+
+---
+
 📌 Future Enhancements (Optional)
 
 WebSocket live streaming for PD/MD updates
