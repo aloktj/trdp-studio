@@ -39,6 +39,8 @@ public:
 
     std::vector<AppLogEntry> getAppLogs(int limit, int offset, std::optional<std::string> level_filter);
 
+    void appendAppLog(const std::string &level, const std::string &message);
+
 private:
     db::Database &database_;
 };

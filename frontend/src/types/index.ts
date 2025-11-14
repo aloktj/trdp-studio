@@ -1,6 +1,8 @@
 export interface UserInfo {
+  id: number;
   username: string;
   role: string;
+  created_at: string;
 }
 
 export interface TrdpConfigSummary {

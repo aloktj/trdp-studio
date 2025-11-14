@@ -214,3 +214,24 @@ table code {
   color: #fff;
   border-color: #2563eb;
 }
+
+.muted {
+  color: #64748b;
+}
+
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+  align-items: flex-end;
+}
+
+.inline-form label {
+  flex: 1 1 220px;
+}
+
+.inline-form .actions {
+  display: flex;
+  gap: 8px;
+}

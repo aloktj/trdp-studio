@@ -11,6 +11,10 @@ struct PdMessage;
 struct MdMessage;
 }
 
+namespace trdp::auth {
+struct User;
+}
+
 namespace trdp::util {
 struct TrdpLogEntry;
 struct AppLogEntry;
@@ -38,6 +42,8 @@ std::string mdIncomingListJson(const std::vector<stack::MdMessage> &messages);
 std::string mdSendResponseJson(const stack::MdMessage &message);
 std::string trdpLogListJson(const std::vector<util::TrdpLogEntry> &logs);
 std::string appLogListJson(const std::vector<util::AppLogEntry> &logs);
+std::string userJson(const auth::User &user);
+std::string userListJson(const std::vector<auth::User> &users);
 
 }  // namespace trdp::http::json
 

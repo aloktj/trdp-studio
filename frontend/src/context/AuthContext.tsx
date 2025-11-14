@@ -13,7 +13,7 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 async function fetchProfile(): Promise<UserInfo | null> {
   try {
-    const data = await apiGet<{ user: UserInfo }>('/api/account/profile');
+    const data = await apiGet<{ user: UserInfo }>('/api/account/me');
     return data.user;
   } catch (err) {
     console.warn('Unable to load profile', err);
@@ -32,13 +32,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch (err) {
         window.sessionStorage.removeItem('trdp-user');
       }
-    } else {
-      fetchProfile().then((profile) => {
-        if (profile) {
-          setUser(profile);
-        }
-      });
     }
+
+    let cancelled = false;
+    fetchProfile().then((profile) => {
+      if (!cancelled && profile) {
+        setUser(profile);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -52,7 +57,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (username: string, password: string) => {
     await apiPost<{ status: string }>("/api/auth/login", { username, password });
     const profile = await fetchProfile();
-    setUser(profile ?? { username, role: 'dev' });
+    if (!profile) {
+      throw new Error('Unable to load account profile');
+    }
+    setUser(profile);
   };
 
   const logout = async () => {

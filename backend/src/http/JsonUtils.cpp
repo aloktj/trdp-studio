@@ -4,6 +4,7 @@
 #include <cctype>
 #include <sstream>
 
+#include "auth/User.hpp"
 #include "trdp/TrdpEngine.hpp"
 #include "util/LogService.hpp"
 
@@ -295,6 +296,25 @@ std::string appLogListJson(const std::vector<util::AppLogEntry> &logs) {
         payload += "\"level\":\"" + escape(logs[i].level) + "\",";
         payload += "\"message\":\"" + escape(logs[i].message) + "\",";
         payload += "\"timestamp_utc\":\"" + escape(logs[i].timestamp) + "\"}";
+    }
+    payload += "]";
+    return payload;
+}
+
+std::string userJson(const auth::User &user) {
+    return std::string{"{"} + "\"id\":" + std::to_string(user.id) + "," +
+           "\"username\":\"" + escape(user.username) + "\"," +
+           "\"role\":\"" + escape(user.role) + "\"," +
+           "\"created_at\":\"" + escape(user.created_at) + "\"}";
+}
+
+std::string userListJson(const std::vector<auth::User> &users) {
+    std::string payload = "[";
+    for (size_t i = 0; i < users.size(); ++i) {
+        if (i != 0) {
+            payload += ",";
+        }
+        payload += userJson(users[i]);
     }
     payload += "]";
     return payload;

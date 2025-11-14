@@ -164,4 +164,22 @@ std::vector<AppLogEntry> LogService::getAppLogs(int limit, int offset, std::opti
     return logs;
 }
 
+void LogService::appendAppLog(const std::string &level, const std::string &message) {
+    sqlite3 *db = database_.handle();
+    if (db == nullptr) {
+        return;
+    }
+
+    sqlite3_stmt *stmt = nullptr;
+    const char *sql = "INSERT INTO app_logs (level, message) VALUES (?, ?);";
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return;
+    }
+
+    sqlite3_bind_text(stmt, 1, level.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, message.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
 }  // namespace trdp::util

@@ -23,8 +23,8 @@ int main() {
         trdp::network::NetworkConfigService network_config_service{database};
         trdp::stack::TrdpEngine trdp_engine{&database};
         trdp::util::LogService log_service{database};
-        trdp::http::HttpRouter router{auth_manager, config_service, network_config_service, trdp_engine,
-                                      log_service};
+        trdp::http::HttpRouter router{auth_manager, auth_service, config_service, network_config_service,
+                                      trdp_engine, log_service};
 
         httplib::Server server;
         router.registerRoutes(server);

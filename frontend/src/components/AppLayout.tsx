@@ -6,7 +6,7 @@ const navItems = [
   { path: '/network', label: 'Network' },
   { path: '/trdp/comm', label: 'TRDP Comms' },
   { path: '/logs', label: 'Logs' },
-  { path: '/account', label: 'Account' },
+  { path: '/account', label: 'Account Control' },
   { path: '/help', label: 'Help' },
 ];
 
