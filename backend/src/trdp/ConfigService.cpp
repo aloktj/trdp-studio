@@ -1,13 +1,12 @@
 #include "trdp/ConfigService.hpp"
 
-#include <sqlite3.h>
-
 #include <optional>
+#include <stdexcept>
 #include <string>
 
 #include "auth/AuthManager.hpp"
-#include "db/Database.hpp"
 #include "httplib.h"
+#include "trdp/TrdpConfigService.hpp"
 
 namespace trdp::config {
 namespace {
@@ -23,8 +22,8 @@ std::optional<long long> parseId(const httplib::Request &req) {
 }
 }  // namespace
 
-ConfigService::ConfigService(db::Database &database, auth::AuthManager &auth_manager)
-    : database_(database), auth_manager_(auth_manager) {}
+ConfigService::ConfigService(auth::AuthManager &auth_manager, TrdpConfigService &config_service)
+    : auth_manager_(auth_manager), config_service_(config_service) {}
 
 void ConfigService::registerRoutes(httplib::Server &server) {
     server.Get("/api/trdp/configs", [this](const httplib::Request &req, httplib::Response &res) {
@@ -50,39 +49,22 @@ void ConfigService::handleListConfigs(const httplib::Request &req, httplib::Resp
         return;
     }
 
-    sqlite3_stmt *stmt = nullptr;
-    const char *sql =
-        "SELECT id, name, validation_status, created_at FROM xml_configs WHERE user_id = ? ORDER BY created_at DESC;";
-    if (sqlite3_prepare_v2(database_.handle(), sql, -1, &stmt, nullptr) != SQLITE_OK) {
-        res.status = 500;
-        res.set_content(jsonError("failed to query configs"), "application/json");
-        return;
-    }
-
-    sqlite3_bind_int64(stmt, 1, *user_id);
-
-    std::string payload = "{\"configs\":[";
-    bool first = true;
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        if (!first) {
-            payload += ",";
+    try {
+        auto configs = config_service_.listConfigsForUser(*user_id);
+        std::string payload = "{\"configs\":[";
+        for (size_t i = 0; i < configs.size(); ++i) {
+            if (i != 0) {
+                payload += ",";
+            }
+            payload += serializeConfigMetadata(configs[i]);
         }
-        first = false;
-        long long id = sqlite3_column_int64(stmt, 0);
-        const unsigned char *name = sqlite3_column_text(stmt, 1);
-        const unsigned char *status = sqlite3_column_text(stmt, 2);
-        const unsigned char *created_at = sqlite3_column_text(stmt, 3);
-        payload += "{\"id\":" + std::to_string(id) +
-                   ",\"name\":\"" + escapeJson(name ? reinterpret_cast<const char *>(name) : "") +
-                   "\",\"validation_status\":\"" +
-                   escapeJson(status ? reinterpret_cast<const char *>(status) : "UNKNOWN") + "\",\"created_at\":\"" +
-                   escapeJson(created_at ? reinterpret_cast<const char *>(created_at) : "") + "\"}";
+        payload += "]}";
+        res.status = 200;
+        res.set_content(payload, "application/json");
+    } catch (const std::exception &ex) {
+        res.status = 500;
+        res.set_content(jsonError(ex.what()), "application/json");
     }
-    sqlite3_finalize(stmt);
-
-    payload += "]}";
-    res.status = 200;
-    res.set_content(payload, "application/json");
 }
 
 void ConfigService::handleCreateConfig(const httplib::Request &req, httplib::Response &res) {
@@ -92,42 +74,23 @@ void ConfigService::handleCreateConfig(const httplib::Request &req, httplib::Res
     }
 
     auto name = extractJsonField(req.body, "name");
-    auto xml_content = extractJsonField(req.body, "xml_content");
+    auto xml = extractJsonField(req.body, "xml");
 
-    if (!name || !xml_content) {
+    if (!name || !xml) {
         res.status = 400;
-        res.set_content(jsonError("name and xml_content are required"), "application/json");
+        res.set_content(jsonError("name and xml are required"), "application/json");
         return;
     }
 
-    std::string validation_status = runValidationStub(*xml_content);
-
-    sqlite3_stmt *stmt = nullptr;
-    const char *sql =
-        "INSERT INTO xml_configs (user_id, name, xml_content, validation_status) VALUES (?, ?, ?, ?);";
-    if (sqlite3_prepare_v2(database_.handle(), sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    try {
+        auto config = config_service_.createConfig(*user_id, *name, *xml);
+        std::string payload = "{\"config\":" + serializeConfigWithXml(config) + "}";
+        res.status = 201;
+        res.set_content(payload, "application/json");
+    } catch (const std::exception &ex) {
         res.status = 500;
-        res.set_content(jsonError("failed to prepare insert"), "application/json");
-        return;
+        res.set_content(jsonError(ex.what()), "application/json");
     }
-
-    sqlite3_bind_int64(stmt, 1, *user_id);
-    sqlite3_bind_text(stmt, 2, name->c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 3, xml_content->c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 4, validation_status.c_str(), -1, SQLITE_TRANSIENT);
-
-    int rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-    if (rc != SQLITE_DONE) {
-        res.status = 500;
-        res.set_content(jsonError("failed to store config"), "application/json");
-        return;
-    }
-
-    long long new_id = sqlite3_last_insert_rowid(database_.handle());
-    std::string payload = "{\"status\":\"created\",\"id\":" + std::to_string(new_id) + "}";
-    res.status = 201;
-    res.set_content(payload, "application/json");
 }
 
 void ConfigService::handleGetConfig(const httplib::Request &req, httplib::Response &res) {
@@ -143,42 +106,21 @@ void ConfigService::handleGetConfig(const httplib::Request &req, httplib::Respon
         return;
     }
 
-    sqlite3_stmt *stmt = nullptr;
-    const char *sql =
-        "SELECT id, name, xml_content, validation_status, created_at FROM xml_configs WHERE id = ? AND user_id = ? LIMIT 1;";
-    if (sqlite3_prepare_v2(database_.handle(), sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    try {
+        auto config = config_service_.getConfigById(*config_id);
+        if (!config || config->user_id != *user_id) {
+            res.status = 404;
+            res.set_content(jsonError("config not found"), "application/json");
+            return;
+        }
+
+        std::string payload = "{\"config\":" + serializeConfigWithXml(*config) + "}";
+        res.status = 200;
+        res.set_content(payload, "application/json");
+    } catch (const std::exception &ex) {
         res.status = 500;
-        res.set_content(jsonError("failed to query config"), "application/json");
-        return;
+        res.set_content(jsonError(ex.what()), "application/json");
     }
-
-    sqlite3_bind_int64(stmt, 1, *config_id);
-    sqlite3_bind_int64(stmt, 2, *user_id);
-
-    int rc = sqlite3_step(stmt);
-    if (rc != SQLITE_ROW) {
-        sqlite3_finalize(stmt);
-        res.status = 404;
-        res.set_content(jsonError("config not found"), "application/json");
-        return;
-    }
-
-    const unsigned char *name = sqlite3_column_text(stmt, 1);
-    const unsigned char *xml = sqlite3_column_text(stmt, 2);
-    const unsigned char *status = sqlite3_column_text(stmt, 3);
-    const unsigned char *created_at = sqlite3_column_text(stmt, 4);
-
-    std::string payload =
-        "{\"id\":" + std::to_string(*config_id) +
-        ",\"name\":\"" + escapeJson(name ? reinterpret_cast<const char *>(name) : "") +
-        "\",\"xml_content\":\"" + escapeJson(xml ? reinterpret_cast<const char *>(xml) : "") +
-        "\",\"validation_status\":\"" + escapeJson(status ? reinterpret_cast<const char *>(status) : "UNKNOWN") +
-        "\",\"created_at\":\"" + escapeJson(created_at ? reinterpret_cast<const char *>(created_at) : "") + "\"}";
-
-    sqlite3_finalize(stmt);
-
-    res.status = 200;
-    res.set_content(payload, "application/json");
 }
 
 void ConfigService::handleActivateConfig(const httplib::Request &req, httplib::Response &res) {
@@ -194,34 +136,22 @@ void ConfigService::handleActivateConfig(const httplib::Request &req, httplib::R
         return;
     }
 
-    if (!configBelongsToUser(*config_id, *user_id)) {
-        res.status = 404;
-        res.set_content(jsonError("config not found"), "application/json");
-        return;
-    }
+    try {
+        auto config = config_service_.getConfigById(*config_id);
+        if (!config || config->user_id != *user_id) {
+            res.status = 404;
+            res.set_content(jsonError("config not found"), "application/json");
+            return;
+        }
 
-    sqlite3_stmt *stmt = nullptr;
-    const char *sql =
-        "INSERT INTO active_config (id, xml_config_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET xml_config_id = "
-        "excluded.xml_config_id;";
-    if (sqlite3_prepare_v2(database_.handle(), sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        config_service_.setActiveConfig(*config_id);
+        res.status = 200;
+        res.set_content("{\"status\":\"activated\",\"config_id\":" + std::to_string(*config_id) + "}",
+                        "application/json");
+    } catch (const std::exception &ex) {
         res.status = 500;
-        res.set_content(jsonError("failed to prepare activation"), "application/json");
-        return;
+        res.set_content(jsonError(ex.what()), "application/json");
     }
-
-    sqlite3_bind_int64(stmt, 1, *config_id);
-    int rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-    if (rc != SQLITE_DONE) {
-        res.status = 500;
-        res.set_content(jsonError("failed to activate config"), "application/json");
-        return;
-    }
-
-    res.status = 200;
-    res.set_content("{\"status\":\"activated\",\"config_id\":" + std::to_string(*config_id) + "}",
-                    "application/json");
 }
 
 std::optional<long long> ConfigService::requireUserId(const httplib::Request &req, httplib::Response &res) {
@@ -231,23 +161,7 @@ std::optional<long long> ConfigService::requireUserId(const httplib::Request &re
         res.set_content(jsonError("authentication required"), "application/json");
         return std::nullopt;
     }
-
     return user->id;
-}
-
-bool ConfigService::configBelongsToUser(long long config_id, long long user_id) {
-    sqlite3_stmt *stmt = nullptr;
-    const char *sql = "SELECT 1 FROM xml_configs WHERE id = ? AND user_id = ? LIMIT 1;";
-    if (sqlite3_prepare_v2(database_.handle(), sql, -1, &stmt, nullptr) != SQLITE_OK) {
-        return false;
-    }
-
-    sqlite3_bind_int64(stmt, 1, config_id);
-    sqlite3_bind_int64(stmt, 2, user_id);
-
-    int rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-    return rc == SQLITE_ROW;
 }
 
 std::optional<std::string> ConfigService::extractJsonField(const std::string &body, const std::string &field_name) {
@@ -307,10 +221,18 @@ std::string ConfigService::jsonError(const std::string &message) {
     return std::string{"{\"error\":\""} + escapeJson(message) + "\"}";
 }
 
-std::string ConfigService::runValidationStub(const std::string &xml_content) {
-    (void)xml_content;
-    // TODO: Integrate with the real TRDP validation library once available.
-    return "UNKNOWN";
+std::string ConfigService::serializeConfigMetadata(const TrdpConfig &config) {
+    return "{\"id\":" + std::to_string(config.id) + ",\"name\":\"" + escapeJson(config.name) +
+           "\",\"validation_status\":\"" + escapeJson(config.validation_status) +
+           "\",\"created_at\":\"" + escapeJson(config.created_at) + "\"}";
+}
+
+std::string ConfigService::serializeConfigWithXml(const TrdpConfig &config) {
+    return "{\"id\":" + std::to_string(config.id) + ",\"user_id\":" + std::to_string(config.user_id) +
+           ",\"name\":\"" + escapeJson(config.name) +
+           "\",\"xml\":\"" + escapeJson(config.xml_content) +
+           "\",\"validation_status\":\"" + escapeJson(config.validation_status) +
+           "\",\"created_at\":\"" + escapeJson(config.created_at) + "\"}";
 }
 
 }  // namespace trdp::config

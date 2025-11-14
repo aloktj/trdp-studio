@@ -9,20 +9,18 @@ class Request;
 class Response;
 }
 
-namespace trdp::db {
-class Database;
-}
-
 namespace trdp::auth {
 class AuthManager;
 }
 
 namespace trdp::config {
+class TrdpConfigService;
+struct TrdpConfig;
 
-// ConfigService provides REST APIs for managing TRDP XML configurations.
+// ConfigService exposes REST APIs for TRDP XML configuration management.
 class ConfigService {
 public:
-    ConfigService(db::Database &database, auth::AuthManager &auth_manager);
+    ConfigService(auth::AuthManager &auth_manager, TrdpConfigService &config_service);
 
     void registerRoutes(httplib::Server &server);
 
@@ -33,14 +31,14 @@ private:
     void handleActivateConfig(const httplib::Request &req, httplib::Response &res);
 
     std::optional<long long> requireUserId(const httplib::Request &req, httplib::Response &res);
-    bool configBelongsToUser(long long config_id, long long user_id);
     static std::optional<std::string> extractJsonField(const std::string &body, const std::string &field_name);
     static std::string escapeJson(const std::string &value);
     static std::string jsonError(const std::string &message);
-    static std::string runValidationStub(const std::string &xml_content);
+    static std::string serializeConfigMetadata(const TrdpConfig &config);
+    static std::string serializeConfigWithXml(const TrdpConfig &config);
 
-    db::Database &database_;
     auth::AuthManager &auth_manager_;
+    TrdpConfigService &config_service_;
 };
 
 }  // namespace trdp::config

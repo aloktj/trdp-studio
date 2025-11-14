@@ -7,6 +7,7 @@
 #include "http/HttpRouter.hpp"
 #include "httplib.h"
 #include "trdp/ConfigService.hpp"
+#include "trdp/TrdpConfigService.hpp"
 
 int main() {
     try {
@@ -14,7 +15,8 @@ int main() {
         trdp::auth::AuthService auth_service{database};
         auth_service.ensureDefaultUsers();
         trdp::auth::AuthManager auth_manager{auth_service};
-        trdp::config::ConfigService config_service{database, auth_manager};
+        trdp::config::TrdpConfigService trdp_config_service{database};
+        trdp::config::ConfigService config_service{auth_manager, trdp_config_service};
         trdp::http::HttpRouter router{auth_manager, config_service};
 
         httplib::Server server;
