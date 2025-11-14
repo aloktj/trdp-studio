@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <string>
 
 namespace httplib {
 class Server;
@@ -49,6 +50,13 @@ private:
     void registerTrdpEngineEndpoints(httplib::Server &server);
     void registerLogEndpoints(httplib::Server &server);
     void registerAccountEndpoints(httplib::Server &server);
+    void registerFrontendEndpoints(httplib::Server &server);
+
+    bool serveFrontendAsset(const httplib::Request &req, httplib::Response &res) const;
+    void respondFrontendMissing(httplib::Response &res) const;
+    std::string locateFrontendRoot() const;
+    static std::string detectMimeType(const std::string &extension);
+    static bool isApiRequest(const std::string &path);
 
     std::optional<auth::User> requireUser(const httplib::Request &req, httplib::Response &res);
     bool ensureAdmin(const auth::User &user, httplib::Response &res);
@@ -59,6 +67,9 @@ private:
     network::NetworkConfigService &network_config_service_;
     stack::TrdpEngine &trdp_engine_;
     util::LogService &log_service_;
+
+    bool frontend_available_{false};
+    std::string frontend_root_;
 };
 
 }  // namespace trdp::http

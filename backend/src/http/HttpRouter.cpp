@@ -1,6 +1,11 @@
 #include "http/HttpRouter.hpp"
 
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -100,6 +105,7 @@ void HttpRouter::registerRoutes(httplib::Server &server) {
     registerTrdpEngineEndpoints(server);
     registerAccountEndpoints(server);
     registerLogEndpoints(server);
+    registerFrontendEndpoints(server);
 }
 
 void HttpRouter::registerHealthEndpoint(httplib::Server &server) {
@@ -458,6 +464,240 @@ void HttpRouter::registerAccountEndpoints(httplib::Server &server) {
             res.set_content(json::error(message), "application/json");
         }
     });
+}
+
+void HttpRouter::registerFrontendEndpoints(httplib::Server &server) {
+    frontend_root_ = locateFrontendRoot();
+    if (frontend_root_.empty()) {
+        std::cerr << "[HttpRouter] Frontend dist folder not found. Serving fallback page." << std::endl;
+        frontend_available_ = false;
+    } else {
+        frontend_available_ = true;
+    }
+
+    server.Get(R"(^/(?!api/)(?!health$).*)", [this](const httplib::Request &req, httplib::Response &res) {
+        if (frontend_available_ && serveFrontendAsset(req, res)) {
+            return;
+        }
+        if (!frontend_available_) {
+            respondFrontendMissing(res);
+            return;
+        }
+        res.status = 404;
+        res.set_content("Not found", "text/plain");
+    });
+}
+
+bool HttpRouter::serveFrontendAsset(const httplib::Request &req, httplib::Response &res) const {
+    if (!frontend_available_ || isApiRequest(req.path) || req.path == "/health") {
+        return false;
+    }
+
+    namespace fs = std::filesystem;
+    fs::path root(frontend_root_);
+    std::string relative = req.path;
+    if (relative.empty() || relative == "/") {
+        relative = "/index.html";
+    }
+    if (relative.find("..") != std::string::npos) {
+        relative = "/index.html";
+    }
+
+    bool looks_like_asset = relative.find('.') != std::string::npos;
+    fs::path target = root / relative.substr(1);
+    if (!fs::exists(target) || fs::is_directory(target)) {
+        if (looks_like_asset) {
+            return false;
+        }
+        target = root / "index.html";
+    }
+
+    std::ifstream file(target, std::ios::binary);
+    if (!file) {
+        return false;
+    }
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    res.set_content(buffer.str(), detectMimeType(target.extension().string()));
+    return true;
+}
+
+void HttpRouter::respondFrontendMissing(httplib::Response &res) const {
+    static constexpr const char *kMessage = R"HTML(<html>
+    <head>
+        <meta charset="utf-8" />
+        <title>TRDP Studio</title>
+        <style>
+            body { font-family: sans-serif; padding: 2rem; background: #0b1320; color: #f2f2f2; }
+            pre { background: rgba(255,255,255,0.05); padding: 1rem; border-radius: 4px; }
+            a { color: #8fd3ff; }
+        </style>
+    </head>
+    <body>
+        <h1>TRDP Studio UI not built yet</h1>
+        <p>The backend is running, but it could not find the compiled React bundle under <code>frontend/dist</code>.</p>
+        <p>To build the web UI locally and make this page go away, run:</p>
+        <pre>cd frontend
+npm install
+npm run build</pre>
+        <p>Then restart <code>trdp_app</code> from the backend build directory. After that, reload this page.</p>
+        <p>If you prefer the dev server, run <code>npm run dev</code> in <code>frontend/</code> and open <a href="http://localhost:5173" target="_blank">http://localhost:5173</a>.</p>
+    </body>
+</html>)HTML";
+    res.status = 200;
+    res.set_content(kMessage, "text/html; charset=utf-8");
+}
+
+std::string HttpRouter::locateFrontendRoot() const {
+    namespace fs = std::filesystem;
+    const char *env_override = std::getenv("TRDP_FRONTEND_DIST");
+    if (env_override != nullptr) {
+        fs::path env_path{env_override};
+        if (fs::exists(env_path) && fs::is_directory(env_path)) {
+            return env_path.string();
+        }
+    }
+
+    std::vector<fs::path> candidates;
+    auto cwd = fs::current_path();
+    candidates.push_back(cwd / "frontend" / "dist");
+    candidates.push_back(cwd / "dist");
+
+    auto parent = cwd.parent_path();
+    if (!parent.empty()) {
+        candidates.push_back(parent / "frontend" / "dist");
+        candidates.push_back(parent / "dist");
+        auto grand_parent = parent.parent_path();
+        if (!grand_parent.empty()) {
+            candidates.push_back(grand_parent / "frontend" / "dist");
+        }
+    }
+
+    for (const auto &candidate : candidates) {
+        if (!candidate.empty() && fs::exists(candidate) && fs::is_directory(candidate)) {
+            return candidate.string();
+        }
+    }
+    return {};
+}
+
+std::string HttpRouter::detectMimeType(const std::string &extension) {
+    if (extension == ".html") {
+        return "text/html; charset=utf-8";
+    }
+    if (extension == ".js") {
+        return "application/javascript";
+    }
+    if (extension == ".css") {
+        return "text/css";
+    }
+    if (extension == ".json") {
+        return "application/json";
+    }
+    if (extension == ".svg") {
+        return "image/svg+xml";
+    }
+    if (extension == ".png") {
+        return "image/png";
+    }
+    if (extension == ".jpg" || extension == ".jpeg") {
+        return "image/jpeg";
+    }
+    if (extension == ".woff2") {
+        return "font/woff2";
+    }
+    if (extension == ".woff") {
+        return "font/woff";
+    }
+    if (extension == ".ttf") {
+        return "font/ttf";
+    }
+    return "application/octet-stream";
+}
+
+bool HttpRouter::isApiRequest(const std::string &path) {
+    return path.rfind("/api/", 0) == 0;
+}
+
+void HttpRouter::registerLogEndpoints(httplib::Server &server) {
+    server.Get("/api/logs/trdp", [this](const httplib::Request &req, httplib::Response &res) {
+        auto user = auth_manager_.userFromRequest(req);
+        if (!user) {
+            res.status = 401;
+            res.set_content(json::error("authentication required"), "application/json");
+            return;
+        }
+
+        int limit = queryInt(req, "limit", 100);
+        int offset = queryInt(req, "offset", 0);
+        if (limit <= 0) {
+            limit = 1;
+        }
+        if (limit > 500) {
+            limit = 500;
+        }
+        if (offset < 0) {
+            offset = 0;
+        }
+
+        try {
+            auto logs = log_service_.getTrdpLogs(limit, offset, queryString(req, "type"),
+                                                 queryString(req, "direction"));
+            res.status = 200;
+            res.set_content(json::trdpLogListJson(logs), "application/json");
+        } catch (const std::exception &ex) {
+            res.status = 500;
+            res.set_content(json::error(ex.what()), "application/json");
+        }
+    });
+
+    server.Get("/api/logs/app", [this](const httplib::Request &req, httplib::Response &res) {
+        auto user = auth_manager_.userFromRequest(req);
+        if (!user) {
+            res.status = 401;
+            res.set_content(json::error("authentication required"), "application/json");
+            return;
+        }
+
+        int limit = queryInt(req, "limit", 100);
+        int offset = queryInt(req, "offset", 0);
+        if (limit <= 0) {
+            limit = 1;
+        }
+        if (limit > 500) {
+            limit = 500;
+        }
+        if (offset < 0) {
+            offset = 0;
+        }
+
+        try {
+            auto logs = log_service_.getAppLogs(limit, offset, queryString(req, "level"));
+            res.status = 200;
+            res.set_content(json::appLogListJson(logs), "application/json");
+        } catch (const std::exception &ex) {
+            res.status = 500;
+            res.set_content(json::error(ex.what()), "application/json");
+        }
+    });
+}
+
+std::optional<auth::User> HttpRouter::requireUser(const httplib::Request &req, httplib::Response &res) {
+    auto user = auth_manager_.userFromRequest(req);
+    if (!user) {
+        res.status = 401;
+        res.set_content(json::error("authentication required"), "application/json");
+    }
+    return user;
+}
+
+bool HttpRouter::ensureAdmin(const auth::User &user, httplib::Response &res) {
+    if (user.role != "admin") {
+        res.status = 403;
+        res.set_content(json::error("admin privileges required"), "application/json");
+        return false;
+    }
+    return true;
 }
 
 void HttpRouter::registerLogEndpoints(httplib::Server &server) {
