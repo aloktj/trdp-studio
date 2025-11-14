@@ -5,8 +5,11 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
 include(FetchContent)
 find_package(SQLite3 REQUIRED)
+find_package(TRDP REQUIRED)
 
 FetchContent_Declare(
     cpp_httplib
@@ -44,6 +47,14 @@ target_include_directories(trdp_app
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+if(TARGET TRDP::trdp)
+    target_link_libraries(trdp_app PRIVATE TRDP::trdp)
+endif()
+
+if(TARGET TRDP::trdpap)
+    target_link_libraries(trdp_app PRIVATE TRDP::trdpap)
+endif()
 
 if(SQLite3_FOUND)
     target_link_libraries(trdp_app PRIVATE SQLite::SQLite3)
