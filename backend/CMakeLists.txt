@@ -22,6 +22,7 @@ set(TRDP_APP_SOURCES
     src/auth/AuthManager.cpp
     src/http/HttpRouter.cpp
     src/trdp/TrdpEngine.cpp
+    src/trdp/ConfigService.cpp
     src/util/Logger.cpp
 )
 

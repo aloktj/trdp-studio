@@ -27,6 +27,10 @@ public:
     // Registers /api/auth/* endpoints on the provided HTTP server.
     void registerRoutes(httplib::Server &server);
 
+    // Returns the username associated with the HttpOnly session cookie if
+    // present and valid.
+    std::optional<std::string> usernameFromRequest(const httplib::Request &req);
+
 private:
     void handleRegister(const httplib::Request &req, httplib::Response &res);
     void handleLogin(const httplib::Request &req, httplib::Response &res);
@@ -41,7 +45,7 @@ private:
     static void attachSessionCookie(const std::string &session_id, httplib::Response &res);
     static void clearSessionCookie(httplib::Response &res);
 
-    std::optional<std::string> sessionFromRequest(const httplib::Request &req);
+    std::optional<std::string> sessionIdFromRequest(const httplib::Request &req);
 
     db::Database &database_;
     std::mutex session_mutex_;

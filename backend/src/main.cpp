@@ -5,12 +5,14 @@
 #include "db/Database.hpp"
 #include "http/HttpRouter.hpp"
 #include "httplib.h"
+#include "trdp/ConfigService.hpp"
 
 int main() {
     try {
         trdp::db::Database database{"trdp_studio.db"};
         trdp::auth::AuthManager auth_manager{database};
-        trdp::http::HttpRouter router{auth_manager};
+        trdp::config::ConfigService config_service{database, auth_manager};
+        trdp::http::HttpRouter router{auth_manager, config_service};
 
         httplib::Server server;
         router.registerRoutes(server);

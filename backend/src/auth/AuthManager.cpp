@@ -81,6 +81,20 @@ void AuthManager::registerRoutes(httplib::Server &server) {
     });
 }
 
+std::optional<std::string> AuthManager::usernameFromRequest(const httplib::Request &req) {
+    auto session_id = sessionIdFromRequest(req);
+    if (!session_id) {
+        return std::nullopt;
+    }
+
+    std::lock_guard<std::mutex> lock(session_mutex_);
+    auto it = sessions_.find(*session_id);
+    if (it == sessions_.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
 void AuthManager::handleRegister(const httplib::Request &req, httplib::Response &res) {
     auto username = extractJsonField(req.body, "username");
     auto password = extractJsonField(req.body, "password");
@@ -150,7 +164,7 @@ void AuthManager::handleLogin(const httplib::Request &req, httplib::Response &re
 }
 
 void AuthManager::handleLogout(const httplib::Request &req, httplib::Response &res) {
-    auto session_id = sessionFromRequest(req);
+    auto session_id = sessionIdFromRequest(req);
     if (!session_id) {
         clearSessionCookie(res);
         res.status = 200;
@@ -270,7 +284,7 @@ void AuthManager::clearSessionCookie(httplib::Response &res) {
     res.set_header("Set-Cookie", cookie.c_str());
 }
 
-std::optional<std::string> AuthManager::sessionFromRequest(const httplib::Request &req) {
+std::optional<std::string> AuthManager::sessionIdFromRequest(const httplib::Request &req) {
     auto cookie_header = req.get_header_value("Cookie");
     if (cookie_header.empty()) {
         return std::nullopt;
@@ -284,12 +298,6 @@ std::optional<std::string> AuthManager::sessionFromRequest(const httplib::Reques
     pos += needle.size();
     auto end = cookie_header.find(';', pos);
     auto session_id = cookie_header.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
-
-    std::lock_guard<std::mutex> lock(session_mutex_);
-    auto it = sessions_.find(session_id);
-    if (it == sessions_.end()) {
-        return std::nullopt;
-    }
     return session_id;
 }
 
