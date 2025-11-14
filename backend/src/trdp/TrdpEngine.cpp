@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <iomanip>
@@ -16,6 +17,18 @@
 
 #ifdef __linux__
 #include <dlfcn.h>
+#endif
+
+#if defined(__has_include)
+#if __has_include(<trdp/trdp_if_light.h>)
+#define TRDP_HAS_NATIVE_API 1
+#include <trdp/iec61375-2-3.h>
+#include <trdp/trdp_if_light.h>
+#else
+#define TRDP_HAS_NATIVE_API 0
+#endif
+#else
+#define TRDP_HAS_NATIVE_API 0
 #endif
 
 #include "db/Database.hpp"
@@ -180,91 +193,176 @@ public:
     }
 
     bool registerPublisher(PdRuntimeState &state) {
+#if TRDP_HAS_NATIVE_API
         if (native_available_) {
-            // TODO: wire exact TRDP function names for PD publish configuration.
-            if (tlc_pdPublish_ != nullptr && native_session_ != nullptr) {
-                tlc_pdPublish_(native_session_, &state.native_handle, state.destination.c_str(), state.cycle_ms,
-                               &state, &TrdpEngine::pdCallbackBridge);
+            auto handle = reinterpret_cast<PdPublisherHandle>(state.native_handle);
+            if (handle == nullptr && tlp_publish_ != nullptr && native_session_ != nullptr) {
+                TRDP_PUB_T pub_handle = nullptr;
+                const TRDP_IP_ADDR_T src_ip = parseEndpointIp(state.source);
+                const TRDP_IP_ADDR_T dest_ip = parseEndpointIp(state.destination);
+                const UINT32 interval = static_cast<UINT32>(std::max(state.cycle_ms, 1)) * 1000U;
+                const UINT8 *data_ptr = state.payload.empty() ? nullptr : state.payload.data();
+                const UINT32 data_len = static_cast<UINT32>(state.payload.size());
+                const TRDP_ERR_T err =
+                    tlp_publish_(native_session_, &pub_handle, &state, nullptr, 0u, static_cast<UINT32>(state.id), 0u, 0u,
+                                 src_ip, dest_ip, interval, 0u, TRDP_FLAGS_DEFAULT, data_ptr, data_len);
+                if (err != TRDP_NO_ERR) {
+                    std::cerr << "Failed to register PD publisher for comId " << state.id << std::endl;
+                    return false;
+                }
+                state.native_handle = pub_handle;
             }
         }
+#endif
         return true;
     }
 
     bool registerSubscriber(PdRuntimeState &state) {
+#if TRDP_HAS_NATIVE_API
         if (native_available_) {
-            // TODO: wire exact TRDP function names for PD subscribe configuration.
-            if (tlc_pdSubscribe_ != nullptr && native_session_ != nullptr) {
-                tlc_pdSubscribe_(native_session_, &state.native_handle, state.source.c_str(), &state,
-                                  &TrdpEngine::pdCallbackBridge);
+            auto handle = reinterpret_cast<PdSubscriberHandle>(state.native_handle);
+            if (handle == nullptr && tlp_subscribe_ != nullptr && native_session_ != nullptr) {
+                TRDP_SUB_T sub_handle = nullptr;
+                const TRDP_IP_ADDR_T src_ip = parseEndpointIp(state.source);
+                const TRDP_IP_ADDR_T dest_ip = parseEndpointIp(state.destination);
+                const UINT32 timeout = static_cast<UINT32>(std::max(state.cycle_ms, 1)) * 1000U;
+                const TRDP_ERR_T err = tlp_subscribe_(native_session_, &sub_handle, &state, &TrdpStackAdapter::pdNativeCallback,
+                                                      0u, static_cast<UINT32>(state.id), 0u, 0u, src_ip, 0u, dest_ip,
+                                                      TRDP_FLAGS_DEFAULT, timeout, TRDP_TO_KEEP_LAST_VALUE);
+                if (err != TRDP_NO_ERR) {
+                    std::cerr << "Failed to register PD subscriber for comId " << state.id << std::endl;
+                    return false;
+                }
+                state.native_handle = sub_handle;
             }
         }
+#endif
         return true;
     }
 
     bool registerMdEndpoint(MdRuntimeState &state) {
+#if TRDP_HAS_NATIVE_API
         if (native_available_) {
-            // TODO: wire exact TRDP function names for MD registration/subscription.
-            if (tlc_mdSubscribe_ != nullptr && native_session_ != nullptr) {
-                tlc_mdSubscribe_(native_session_, &state.native_handle, state.destination.c_str(), &state,
-                                 &TrdpEngine::mdCallbackBridge);
+            auto handle = reinterpret_cast<MdListenerHandle>(state.native_handle);
+            if (handle == nullptr && tlm_addListener_ != nullptr && native_session_ != nullptr) {
+                TRDP_LIS_T listener = nullptr;
+                const TRDP_IP_ADDR_T src_ip = parseEndpointIp(state.source);
+                const TRDP_IP_ADDR_T dest_ip = parseEndpointIp(state.destination);
+                TRDP_URI_USER_T empty_uri = {0};
+                const TRDP_ERR_T err = tlm_addListener_(native_session_, &listener, &state,
+                                                        &TrdpStackAdapter::mdNativeCallback, static_cast<BOOL8>(1u),
+                                                        static_cast<UINT32>(state.runtime_id), 0u, 0u, src_ip, 0u,
+                                                        dest_ip, TRDP_FLAGS_DEFAULT, empty_uri, empty_uri);
+                if (err != TRDP_NO_ERR) {
+                    std::cerr << "Failed to register MD listener for runtime " << state.runtime_id << std::endl;
+                    return false;
+                }
+                state.native_handle = listener;
             }
         }
+#endif
         return true;
     }
 
     bool sendPd(PdRuntimeState &state, const std::vector<uint8_t> &payload) {
         state.payload = payload;
+#if TRDP_HAS_NATIVE_API
         if (native_available_) {
-            // TODO: wire exact TRDP function names for PD transmission.
-            if (tlc_pdSend_ != nullptr && native_session_ != nullptr && state.native_handle != nullptr) {
-                return tlc_pdSend_(native_session_, state.native_handle, payload.data(), payload.size()) == 0;
+            auto handle = reinterpret_cast<PdPublisherHandle>(state.native_handle);
+            if (handle == nullptr) {
+                if (!registerPublisher(state)) {
+                    return false;
+                }
+                handle = reinterpret_cast<PdPublisherHandle>(state.native_handle);
+            }
+            if (handle != nullptr && tlp_put_ != nullptr && native_session_ != nullptr) {
+                const UINT8 *data_ptr = payload.empty() ? nullptr : payload.data();
+                const TRDP_ERR_T err = tlp_put_(native_session_, handle, data_ptr, static_cast<UINT32>(payload.size()));
+                return err == TRDP_NO_ERR;
             }
             return false;
         }
+#endif
         return true;
     }
 
     bool sendMd(MdRuntimeState &state, const std::vector<uint8_t> &payload, int message_id) {
         state.last_payload = payload;
         state.last_message_id = message_id;
+#if TRDP_HAS_NATIVE_API
         if (native_available_) {
-            // TODO: wire exact TRDP function names for MD transmission.
-            if (tlc_mdSend_ != nullptr && native_session_ != nullptr && state.native_handle != nullptr) {
-                return tlc_mdSend_(native_session_, state.native_handle, payload.data(), payload.size(), &state,
-                                   &TrdpEngine::mdCallbackBridge) == 0;
+            if (tlm_notify_ != nullptr && native_session_ != nullptr) {
+                const TRDP_IP_ADDR_T src_ip = parseEndpointIp(state.source);
+                const TRDP_IP_ADDR_T dest_ip = parseEndpointIp(state.destination);
+                TRDP_URI_USER_T empty_uri = {0};
+                const UINT8 *data_ptr = payload.empty() ? nullptr : payload.data();
+                const TRDP_ERR_T err =
+                    tlm_notify_(native_session_, &state, &TrdpStackAdapter::mdNativeCallback,
+                                static_cast<UINT32>(message_id), 0u, 0u, src_ip, dest_ip, TRDP_FLAGS_DEFAULT,
+                                &md_config_.sendParam, data_ptr, static_cast<UINT32>(payload.size()), empty_uri,
+                                empty_uri);
+                return err == TRDP_NO_ERR;
             }
             return false;
         }
+#endif
         return true;
     }
 
     bool iterate() {
+#if TRDP_HAS_NATIVE_API
         if (native_available_) {
-            // TODO: wire exact TRDP function names for TRDP event processing.
             if (tlc_process_ != nullptr && native_session_ != nullptr) {
-                return tlc_process_(native_session_) == 0;
+                return tlc_process_(native_session_, nullptr, nullptr) == TRDP_NO_ERR;
             }
             return false;
         }
+#endif
         return true;
     }
 
     bool ready() const { return ready_; }
 
 private:
+#if TRDP_HAS_NATIVE_API
+    using NativeSessionHandle = TRDP_APP_SESSION_T;
+    using PdPublisherHandle = TRDP_PUB_T;
+    using PdSubscriberHandle = TRDP_SUB_T;
+    using MdListenerHandle = TRDP_LIS_T;
+#else
+    using NativeSessionHandle = void *;
+    using PdPublisherHandle = void *;
+    using PdSubscriberHandle = void *;
+    using MdListenerHandle = void *;
+#endif
+
 #ifdef __linux__
-    using InitFn = int (*)(void **, const char *, const char *);        // TODO: wire exact TRDP function names.
-    using TermFn = int (*)(void *);                                     // TODO: wire exact TRDP function names.
-    using ProcessFn = int (*)(void *);                                  // TODO: wire exact TRDP function names.
-    using PdPublishFn = int (*)(void *, void **, const char *, int, void *,
-                                void (*)(void *, const uint8_t *, uint32_t, const char *, const char *));
-    using PdSubscribeFn = int (*)(void *, void **, const char *, void *,
-                                  void (*)(void *, const uint8_t *, uint32_t, const char *, const char *));
-    using PdSendFn = int (*)(void *, void *, const uint8_t *, std::size_t);
-    using MdSendFn = int (*)(void *, void *, const uint8_t *, std::size_t, void *,
-                             void (*)(void *, const uint8_t *, uint32_t, const char *, const char *));
-    using MdSubscribeFn = int (*)(void *, void **, const char *, void *,
-                                  void (*)(void *, const uint8_t *, uint32_t, const char *, const char *));
+#if TRDP_HAS_NATIVE_API
+    using InitFn = TRDP_ERR_T (*)(TRDP_PRINT_DBG_T, void *, const TRDP_MEM_CONFIG_T *);
+    using TermFn = TRDP_ERR_T (*)(void);
+    using OpenSessionFn = TRDP_ERR_T (*)(TRDP_APP_SESSION_T *, TRDP_IP_ADDR_T, TRDP_IP_ADDR_T,
+                                         const TRDP_MARSHALL_CONFIG_T *, const TRDP_PD_CONFIG_T *,
+                                         const TRDP_MD_CONFIG_T *, const TRDP_PROCESS_CONFIG_T *);
+    using CloseSessionFn = TRDP_ERR_T (*)(TRDP_APP_SESSION_T);
+    using ProcessFn = TRDP_ERR_T (*)(TRDP_APP_SESSION_T, TRDP_FDS_T *, INT32 *);
+    using PdPublishFn = TRDP_ERR_T (*)(TRDP_APP_SESSION_T, TRDP_PUB_T *, const void *, TRDP_PD_CALLBACK_T, UINT32,
+                                       UINT32, UINT32, UINT32, TRDP_IP_ADDR_T, TRDP_IP_ADDR_T, UINT32, UINT32,
+                                       TRDP_FLAGS_T, const UINT8 *, UINT32);
+    using PdSubscribeFn = TRDP_ERR_T (*)(TRDP_APP_SESSION_T, TRDP_SUB_T *, const void *, TRDP_PD_CALLBACK_T, UINT32,
+                                         UINT32, UINT32, UINT32, TRDP_IP_ADDR_T, TRDP_IP_ADDR_T, TRDP_IP_ADDR_T,
+                                         TRDP_FLAGS_T, UINT32, TRDP_TO_BEHAVIOR_T);
+    using PdSendFn = TRDP_ERR_T (*)(TRDP_APP_SESSION_T, TRDP_PUB_T, const UINT8 *, UINT32);
+    using MdSendFn = TRDP_ERR_T (*)(TRDP_APP_SESSION_T, const void *, TRDP_MD_CALLBACK_T, UINT32, UINT32, UINT32,
+                                    TRDP_IP_ADDR_T, TRDP_IP_ADDR_T, TRDP_FLAGS_T, const TRDP_COM_PARAM_T *,
+                                    const UINT8 *, UINT32, const TRDP_URI_USER_T, const TRDP_URI_USER_T);
+    using MdSubscribeFn = TRDP_ERR_T (*)(TRDP_APP_SESSION_T, TRDP_LIS_T *, const void *, TRDP_MD_CALLBACK_T, BOOL8,
+                                         UINT32, UINT32, UINT32, TRDP_IP_ADDR_T, TRDP_IP_ADDR_T, TRDP_IP_ADDR_T,
+                                         TRDP_FLAGS_T, const TRDP_URI_USER_T, const TRDP_URI_USER_T);
+#else
+    using InitFn = int (*)(void **, const char *, const char *);
+    using TermFn = int (*)(void *);
+    using ProcessFn = int (*)(void *);
+#endif
 #endif
 
     bool loadNativeLibrary() {
@@ -277,15 +375,27 @@ private:
             std::cerr << "TRDP native library not found; continuing in simulation mode." << std::endl;
             return false;
         }
-        tlc_init_ = reinterpret_cast<InitFn>(dlsym(library_handle_, "tlc_init"));  // TODO: confirm name.
+#if TRDP_HAS_NATIVE_API
+        tlc_init_ = reinterpret_cast<InitFn>(dlsym(library_handle_, "tlc_init"));
+        tlc_openSession_ = reinterpret_cast<OpenSessionFn>(dlsym(library_handle_, "tlc_openSession"));
+        tlc_closeSession_ = reinterpret_cast<CloseSessionFn>(dlsym(library_handle_, "tlc_closeSession"));
         tlc_terminate_ = reinterpret_cast<TermFn>(dlsym(library_handle_, "tlc_terminate"));
         tlc_process_ = reinterpret_cast<ProcessFn>(dlsym(library_handle_, "tlc_process"));
-        tlc_pdPublish_ = reinterpret_cast<PdPublishFn>(dlsym(library_handle_, "tlc_pdPublish"));
-        tlc_pdSubscribe_ = reinterpret_cast<PdSubscribeFn>(dlsym(library_handle_, "tlc_pdSubscribe"));
-        tlc_pdSend_ = reinterpret_cast<PdSendFn>(dlsym(library_handle_, "tlc_pdSend"));
-        tlc_mdSend_ = reinterpret_cast<MdSendFn>(dlsym(library_handle_, "tlc_mdSend"));
-        tlc_mdSubscribe_ = reinterpret_cast<MdSubscribeFn>(dlsym(library_handle_, "tlc_mdSubscribe"));
+        tlp_publish_ = reinterpret_cast<PdPublishFn>(dlsym(library_handle_, "tlp_publish"));
+        tlp_subscribe_ = reinterpret_cast<PdSubscribeFn>(dlsym(library_handle_, "tlp_subscribe"));
+        tlp_put_ = reinterpret_cast<PdSendFn>(dlsym(library_handle_, "tlp_put"));
+        tlm_notify_ = reinterpret_cast<MdSendFn>(dlsym(library_handle_, "tlm_notify"));
+        tlm_addListener_ = reinterpret_cast<MdSubscribeFn>(dlsym(library_handle_, "tlm_addListener"));
+        return tlc_init_ != nullptr && tlc_openSession_ != nullptr && tlc_closeSession_ != nullptr &&
+               tlc_terminate_ != nullptr && tlc_process_ != nullptr && tlp_publish_ != nullptr &&
+               tlp_subscribe_ != nullptr && tlp_put_ != nullptr && tlm_notify_ != nullptr &&
+               tlm_addListener_ != nullptr;
+#else
+        tlc_init_ = reinterpret_cast<InitFn>(dlsym(library_handle_, "tlc_init"));
+        tlc_terminate_ = reinterpret_cast<TermFn>(dlsym(library_handle_, "tlc_terminate"));
+        tlc_process_ = reinterpret_cast<ProcessFn>(dlsym(library_handle_, "tlc_process"));
         return tlc_init_ != nullptr && tlc_terminate_ != nullptr && tlc_process_ != nullptr;
+#endif
 #else
         return false;
 #endif
@@ -299,21 +409,46 @@ private:
         }
         tlc_init_ = nullptr;
         tlc_terminate_ = nullptr;
+#if TRDP_HAS_NATIVE_API
+        tlc_openSession_ = nullptr;
+        tlc_closeSession_ = nullptr;
         tlc_process_ = nullptr;
-        tlc_pdPublish_ = nullptr;
-        tlc_pdSubscribe_ = nullptr;
-        tlc_pdSend_ = nullptr;
-        tlc_mdSend_ = nullptr;
-        tlc_mdSubscribe_ = nullptr;
+        tlp_publish_ = nullptr;
+        tlp_subscribe_ = nullptr;
+        tlp_put_ = nullptr;
+        tlm_notify_ = nullptr;
+        tlm_addListener_ = nullptr;
+#else
+        tlc_process_ = nullptr;
+#endif
 #endif
     }
 
     bool initializeNativeSession(const network::NetworkConfig &cfg) {
 #ifdef __linux__
+#if TRDP_HAS_NATIVE_API
+        if (tlc_init_ == nullptr || tlc_openSession_ == nullptr || tlc_terminate_ == nullptr) {
+            return false;
+        }
+        if (tlc_init_(&TrdpStackAdapter::logAdapterMessage, this, nullptr) != TRDP_NO_ERR) {
+            return false;
+        }
+        configureSessionDefaults(cfg);
+        const TRDP_IP_ADDR_T own_ip = parseEndpointIp(cfg.local_ip);
+        const TRDP_ERR_T err =
+            tlc_openSession_(&native_session_, own_ip, own_ip, nullptr, &pd_config_, &md_config_, &process_config_);
+        if (err != TRDP_NO_ERR) {
+            tlc_terminate_();
+            native_session_ = nullptr;
+            return false;
+        }
+        return true;
+#else
         if (tlc_init_ == nullptr) {
             return false;
         }
         return tlc_init_(&native_session_, cfg.interface_name.c_str(), cfg.local_ip.c_str()) == 0;
+#endif
 #else
         (void)cfg;
         return false;
@@ -322,12 +457,128 @@ private:
 
     void shutdownNativeSession() {
 #ifdef __linux__
+#if TRDP_HAS_NATIVE_API
+        if (native_session_ != nullptr && tlc_closeSession_ != nullptr) {
+            tlc_closeSession_(native_session_);
+            native_session_ = nullptr;
+        }
+        if (tlc_terminate_ != nullptr) {
+            tlc_terminate_();
+        }
+#else
         if (native_session_ != nullptr && tlc_terminate_ != nullptr) {
             tlc_terminate_(native_session_);
             native_session_ = nullptr;
         }
 #endif
+#endif
     }
+
+#if TRDP_HAS_NATIVE_API
+    void configureSessionDefaults(const network::NetworkConfig &cfg) {
+        pd_config_ = {};
+        pd_config_.pfCbFunction = &TrdpStackAdapter::pdNativeCallback;
+        pd_config_.pRefCon = this;
+        pd_config_.sendParam = TRDP_PD_DEFAULT_SEND_PARAM;
+        pd_config_.flags = TRDP_FLAGS_DEFAULT;
+        pd_config_.timeout = 1000000u;
+        pd_config_.toBehavior = TRDP_TO_KEEP_LAST_VALUE;
+        pd_config_.port = static_cast<UINT16>(cfg.pd_port > 0 ? cfg.pd_port : 17224);
+
+        md_config_ = {};
+        md_config_.pfCbFunction = &TrdpStackAdapter::mdNativeCallback;
+        md_config_.pRefCon = this;
+        md_config_.sendParam = TRDP_MD_DEFAULT_SEND_PARAM;
+        md_config_.flags = TRDP_FLAGS_DEFAULT;
+        md_config_.replyTimeout = 2000000u;
+        md_config_.confirmTimeout = 2000000u;
+        md_config_.connectTimeout = 2000000u;
+        md_config_.sendingTimeout = 2000000u;
+        md_config_.udpPort = static_cast<UINT16>(cfg.md_port > 0 ? cfg.md_port : 17225);
+        md_config_.tcpPort = md_config_.udpPort;
+        md_config_.maxNumSessions = 16u;
+
+        process_config_ = {};
+        std::snprintf(process_config_.hostName, sizeof(process_config_.hostName), "trdp-studio");
+        std::snprintf(process_config_.leaderName, sizeof(process_config_.leaderName), "trdp-leader");
+        std::snprintf(process_config_.type, sizeof(process_config_.type), "studio");
+        process_config_.cycleTime = 100000u;
+        process_config_.priority = 0u;
+        process_config_.options = TRDP_OPTION_BLOCK;
+        process_config_.vlanId = 0u;
+    }
+
+    static void logAdapterMessage(void *, TRDP_LOG_T category, const CHAR8 *pTime, const CHAR8 *pFile, UINT16 line,
+                                  const CHAR8 *message) {
+        (void)category;
+        (void)pTime;
+        (void)pFile;
+        (void)line;
+        if (message != nullptr) {
+            std::clog << "[TRDP] " << message << std::endl;
+        }
+    }
+
+    static void pdNativeCallback(void *ref_con, TRDP_APP_SESSION_T, const TRDP_PD_INFO_T *info, UINT8 *payload,
+                                 UINT32 size) {
+        const uint8_t *data_ptr = payload;
+        std::string src_ip;
+        std::string dst_ip;
+        if (info != nullptr) {
+            src_ip = formatIp(info->srcIpAddr);
+            dst_ip = formatIp(info->destIpAddr);
+        }
+        TrdpEngine::pdCallbackBridge(ref_con, data_ptr, size,
+                                     src_ip.empty() ? nullptr : src_ip.c_str(),
+                                     dst_ip.empty() ? nullptr : dst_ip.c_str());
+    }
+
+    static void mdNativeCallback(void *ref_con, TRDP_APP_SESSION_T, const TRDP_MD_INFO_T *info, UINT8 *payload,
+                                 UINT32 size) {
+        const uint8_t *data_ptr = payload;
+        std::string src_ip;
+        std::string dst_ip;
+        if (info != nullptr) {
+            src_ip = formatIp(info->srcIpAddr);
+            dst_ip = formatIp(info->destIpAddr);
+        }
+        TrdpEngine::mdCallbackBridge(ref_con, data_ptr, size,
+                                     src_ip.empty() ? nullptr : src_ip.c_str(),
+                                     dst_ip.empty() ? nullptr : dst_ip.c_str());
+    }
+
+    static std::string formatIp(TRDP_IP_ADDR_T value) {
+        if (value == 0u) {
+            return {};
+        }
+        char buffer[32];
+        std::snprintf(buffer, sizeof(buffer), "%u.%u.%u.%u",
+                      (value >> 24) & 0xFFu, (value >> 16) & 0xFFu, (value >> 8) & 0xFFu, value & 0xFFu);
+        return buffer;
+    }
+
+    static TRDP_IP_ADDR_T parseIp(const std::string &ip) {
+        if (ip.empty()) {
+            return 0u;
+        }
+        unsigned int octets[4];
+        if (std::sscanf(ip.c_str(), "%u.%u.%u.%u", &octets[3], &octets[2], &octets[1], &octets[0]) != 4) {
+            return 0u;
+        }
+        return (static_cast<TRDP_IP_ADDR_T>(octets[3] & 0xFFu) << 24) |
+               (static_cast<TRDP_IP_ADDR_T>(octets[2] & 0xFFu) << 16) |
+               (static_cast<TRDP_IP_ADDR_T>(octets[1] & 0xFFu) << 8) |
+               static_cast<TRDP_IP_ADDR_T>(octets[0] & 0xFFu);
+    }
+
+    TRDP_IP_ADDR_T parseEndpointIp(const std::string &endpoint) const {
+        const std::string ip = TrdpEngine::extractIp(endpoint);
+        if (ip.empty()) {
+            return parseIp(network_cfg_.local_ip);
+        }
+        return parseIp(ip);
+    }
+#endif
 
     TrdpEngine &engine_;
     network::NetworkConfig network_cfg_;
@@ -336,13 +587,22 @@ private:
     InitFn tlc_init_ {nullptr};
     TermFn tlc_terminate_ {nullptr};
     ProcessFn tlc_process_ {nullptr};
-    PdPublishFn tlc_pdPublish_ {nullptr};
-    PdSubscribeFn tlc_pdSubscribe_ {nullptr};
-    PdSendFn tlc_pdSend_ {nullptr};
-    MdSendFn tlc_mdSend_ {nullptr};
-    MdSubscribeFn tlc_mdSubscribe_ {nullptr};
+#if TRDP_HAS_NATIVE_API
+    OpenSessionFn tlc_openSession_ {nullptr};
+    CloseSessionFn tlc_closeSession_ {nullptr};
+    PdPublishFn tlp_publish_ {nullptr};
+    PdSubscribeFn tlp_subscribe_ {nullptr};
+    PdSendFn tlp_put_ {nullptr};
+    MdSendFn tlm_notify_ {nullptr};
+    MdSubscribeFn tlm_addListener_ {nullptr};
 #endif
-    void *native_session_ {nullptr};
+#endif
+    NativeSessionHandle native_session_ {nullptr};
+#if TRDP_HAS_NATIVE_API
+    TRDP_PD_CONFIG_T pd_config_ {};
+    TRDP_MD_CONFIG_T md_config_ {};
+    TRDP_PROCESS_CONFIG_T process_config_ {};
+#endif
     bool native_available_ {false};
     bool ready_ {false};
 };
