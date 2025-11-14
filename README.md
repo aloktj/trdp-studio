@@ -385,6 +385,60 @@ npm run dev
 
 ---
 
+🔗 Integrating the TCNopen Fork as a Submodule
+
+The [aloktj/TCNopen](https://github.com/aloktj/TCNopen) fork provides the TRDP implementation and Wireshark plugin we rely on. Add it to this repository as a git submodule (for example under `external/TCNopen`) so that both the backend and tooling can share the same source tree:
+
+```sh
+git submodule add https://github.com/aloktj/TCNopen.git external/TCNopen
+git submodule update --init --recursive
+```
+
+After the folder is present, wire it into the backend build by adding an `add_subdirectory(external/TCNopen/trdp)` (or a similar wrapper CMakeLists) inside `backend/CMakeLists.txt`. Export the `trdp`, `tau`, and optional `trdp_spy_plugin` targets so the application executable can simply `target_link_libraries(trdp_app PRIVATE trdp tau)` without caring about the TRDP source layout.
+
+#### Building the TRDP stack with CMake presets
+
+The fork ships a comprehensive `CMakePresets.json`. Keep the TRDP build isolated under the submodule directory and use the upstream presets:
+
+```sh
+cd external/TCNopen
+cmake -S . -B build/LINUX_X86_64 --preset LINUX_X86_64
+cmake --build build/LINUX_X86_64
+```
+
+If you target a different architecture or compiler, start from the generic preset and override the cache variables that describe the platform:
+
+```sh
+cmake -S . -B build/custom --preset base \
+  -DTRDP_TARGET_ARCH=<arch> \
+  -DTRDP_TARGET_OS=<os> \
+  -DTRDP_TARGET_VOS=<vos>
+```
+
+Every preset expects CMake ≥ 3.16, Ninja, and the dependencies listed in the TCNopen README (`uuid-dev`, `libglib2.0-dev`, FlexeLint, Doxygen, Graphviz, and the Debian packaging toolchain when needed). Append extra cache definitions such as `-DTRDP_MD_SUPPORT=ON` or `-DTRDP_DEBUG=ON` directly to the configure command when you need features like MD messaging, TSN, or the high-performance indexed mode.
+
+#### Optional helper targets
+
+You can keep using the upstream helper targets from inside `external/TCNopen`:
+
+```sh
+# Debian packaging
+cmake --build build/LINUX_X86_64 --target bindeb-pkg
+
+# Wireshark TRDP-SPY plugin
+cmake --build build/LINUX_X86_64 --target trdp_spy_plugin
+
+# Documentation and lint
+cmake --build build/LINUX_X86_64 --target doc
+cmake --build build/LINUX_X86_64 --target lint
+```
+
+The `.deb` packages and plugin artifacts are created inside the chosen build directory (for example `build/LINUX_X86_64/pkg` for packages and `build/LINUX_X86_64/trdp/spy/src/trdp_spy` for the plugin). Install the Debian packages with `sudo dpkg -i build/LINUX_X86_64/pkg/*.deb` and copy the plugin into Wireshark’s extension folder. The helper targets re-expose the upstream `debuild`, documentation, lint, and distribution workflows, so no legacy Makefiles are required.
+
+Once the TRDP libraries are compiled, point the backend’s CMake toolchain to the install location or use `add_subdirectory` so that `trdp_app` links the freshly built static libraries directly. This keeps the TRDP stack synchronized with the application source tree and makes reproducible builds trivial on CI.
+
+---
+
 🌐 Running the Application
 
 1. Start the backend:
