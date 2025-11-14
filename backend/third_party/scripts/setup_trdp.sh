@@ -13,7 +13,14 @@ Arguments:
   install-prefix       Writable directory that will receive the staged headers
                        and libraries.
   make-config-target   Optional Makefile target that selects the platform
-                       configuration (defaults to LINUX_X86_64_config).
+                      configuration (defaults to LINUX_X86_64_config).
+
+After the script finishes, point CMake at the prefix via:
+
+  cmake -S backend -B build/backend -DTRDP_ROOT=<install-prefix>
+
+or pass the same cache entries from the repository root so the backend build
+can discover the freshly staged TRDP libraries.
 USAGE
     exit 1
 fi

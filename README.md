@@ -370,11 +370,32 @@ POST /api/account/users/{id}/reset_password
 
 Backend
 
-cd backend
-mkdir build && cd build
-cmake ..
-make -j
-./trdp_app
+The backend CMake project lives under `backend/`. Configure it from the repository root so that the
+`TRDP_ROOT` cache entry (or the automation helpers) can be provided up front:
+
+```sh
+mkdir -p build/backend
+cmake -S backend -B build/backend \
+      -DTRDP_ROOT=/opt/trdp-3.0.0.0   # prefix created via setup_trdp.sh or manual install
+cmake --build build/backend
+./build/backend/trdp_app
+```
+
+If you want CMake to download and stage the TRDP stack automatically, flip on the helper option that
+wraps `third_party/scripts/setup_trdp.sh` and tell it where to place the staged headers/libs:
+
+```sh
+mkdir -p build/backend
+cmake -S backend -B build/backend \
+      -DTRDP_AUTO_SETUP=ON \
+      -DTRDP_SETUP_PREFIX=$HOME/.local/trdp \
+      -DTRDP_PLATFORM_CONFIG=LINUX_X86_64_config
+cmake --build build/backend
+```
+
+The same cache variables work regardless of whether you start from the repository root or the
+`backend/` directory; configuring from the root simply keeps the build artifacts consolidated under
+`build/`.
 
 Frontend (React)
 
