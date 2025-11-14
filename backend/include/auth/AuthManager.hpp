@@ -1,14 +1,51 @@
 #pragma once
 
+#include <mutex>
+#include <optional>
 #include <string>
+#include <unordered_map>
+
+namespace httplib {
+class Server;
+class Request;
+class Response;
+}  // namespace httplib
+
+namespace trdp::db {
+class Database;
+}
 
 namespace trdp::auth {
 
-// TODO: Implement full authentication management (user sessions, password hashing, etc.).
+// AuthManager owns the REST handlers for registration, login, and logout.
+// It persists users in SQLite and keeps a lightweight in-memory session map
+// for issuing HttpOnly cookies.
 class AuthManager {
 public:
-    AuthManager() = default;
-    void initialize();
+    explicit AuthManager(db::Database &database);
+
+    // Registers /api/auth/* endpoints on the provided HTTP server.
+    void registerRoutes(httplib::Server &server);
+
+private:
+    void handleRegister(const httplib::Request &req, httplib::Response &res);
+    void handleLogin(const httplib::Request &req, httplib::Response &res);
+    void handleLogout(const httplib::Request &req, httplib::Response &res);
+
+    bool usernameExists(const std::string &username);
+    bool insertUser(const std::string &username, const std::string &password_hash, const std::string &role = "dev");
+    std::optional<std::string> fetchPasswordHash(const std::string &username);
+
+    static std::optional<std::string> extractJsonField(const std::string &body, const std::string &field_name);
+    static std::string generateSessionId();
+    static void attachSessionCookie(const std::string &session_id, httplib::Response &res);
+    static void clearSessionCookie(httplib::Response &res);
+
+    std::optional<std::string> sessionFromRequest(const httplib::Request &req);
+
+    db::Database &database_;
+    std::mutex session_mutex_;
+    std::unordered_map<std::string, std::string> sessions_;
 };
 
 }  // namespace trdp::auth
