@@ -12,9 +12,12 @@ const emptyConfig: NetworkConfig = {
 };
 
 export function NetworkPage() {
-  const [config, setConfig] = useState<NetworkConfig>(emptyConfig);
+  const [config, setConfig] = useState<NetworkConfig | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [hasSavedConfig, setHasSavedConfig] = useState<boolean | null>(null);
+
+  const safeConfig = config ?? emptyConfig;
 
   useEffect(() => {
     loadConfig();
@@ -22,8 +25,9 @@ export function NetworkPage() {
 
   const loadConfig = async () => {
     try {
-      const data = await apiGet<{ config: NetworkConfig }>('/api/network/config');
-      setConfig(data.config);
+      const data = await apiGet<{ config: NetworkConfig | null }>('/api/network/config');
+      setConfig(data.config ?? emptyConfig);
+      setHasSavedConfig(Boolean(data.config));
     } catch (err) {
       setError((err as Error).message);
     }
@@ -35,11 +39,12 @@ export function NetworkPage() {
     setError(null);
     try {
       const payload: NetworkConfig = {
-        ...config,
-        multicast_groups: config.multicast_groups.filter((group) => group.trim().length > 0),
+        ...safeConfig,
+        multicast_groups: safeConfig.multicast_groups.filter((group) => group.trim().length > 0),
       };
-      const data = await apiPost<{ config: NetworkConfig }>('/api/network/config', payload);
-      setConfig(data.config);
+      const data = await apiPost<{ config: NetworkConfig | null }>('/api/network/config', payload);
+      setConfig(data.config ?? emptyConfig);
+      setHasSavedConfig(Boolean(data.config));
       setMessage('Network configuration saved');
     } catch (err) {
       setError((err as Error).message);
@@ -48,40 +53,46 @@ export function NetworkPage() {
 
   const updateField = (field: keyof NetworkConfig, value: string) => {
     setConfig((prev) => ({
-      ...prev,
+      ...(prev ?? emptyConfig),
       [field]: field === 'pd_port' || field === 'md_port' ? Number(value) : value,
     }));
   };
 
   const updateGroups = (value: string) => {
-    setConfig((prev) => ({ ...prev, multicast_groups: value.split(',').map((entry) => entry.trim()) }));
+    setConfig((prev) => ({
+      ...(prev ?? emptyConfig),
+      multicast_groups: value.split(',').map((entry) => entry.trim()),
+    }));
   };
 
   return (
     <div>
       <h1>Network Configuration</h1>
       {error && <div className="error">{error}</div>}
+      {hasSavedConfig === false && (
+        <div className="notice">No network configuration saved yet. Please fill out the form.</div>
+      )}
       {message && <div className="notice">{message}</div>}
       <form className="card stack" onSubmit={handleSubmit}>
         <label>
           Interface name
-          <input value={config.interface_name} onChange={(e) => updateField('interface_name', e.target.value)} />
+          <input value={safeConfig.interface_name} onChange={(e) => updateField('interface_name', e.target.value)} />
         </label>
         <label>
           Local IP
-          <input value={config.local_ip} onChange={(e) => updateField('local_ip', e.target.value)} />
+          <input value={safeConfig.local_ip} onChange={(e) => updateField('local_ip', e.target.value)} />
         </label>
         <label>
           Multicast groups (comma separated)
-          <input value={config.multicast_groups.join(', ')} onChange={(e) => updateGroups(e.target.value)} />
+          <input value={safeConfig.multicast_groups.join(', ')} onChange={(e) => updateGroups(e.target.value)} />
         </label>
         <label>
           PD Port
-          <input type="number" value={config.pd_port} onChange={(e) => updateField('pd_port', e.target.value)} />
+          <input type="number" value={safeConfig.pd_port} onChange={(e) => updateField('pd_port', e.target.value)} />
         </label>
         <label>
           MD Port
-          <input type="number" value={config.md_port} onChange={(e) => updateField('md_port', e.target.value)} />
+          <input type="number" value={safeConfig.md_port} onChange={(e) => updateField('md_port', e.target.value)} />
         </label>
         <button type="submit">Save</button>
       </form>
