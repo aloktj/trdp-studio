@@ -37,3 +37,21 @@ export interface MdMessage {
   direction: 'incoming' | 'outgoing';
   timestamp: string;
 }
+
+export interface TrdpLogEntry {
+  id: number;
+  direction: string;
+  type: string;
+  msg_id: number;
+  src_ip: string;
+  dst_ip: string;
+  payload_hex: string;
+  timestamp_utc: string;
+}
+
+export interface AppLogEntry {
+  id: number;
+  level: string;
+  message: string;
+  timestamp_utc: string;
+}

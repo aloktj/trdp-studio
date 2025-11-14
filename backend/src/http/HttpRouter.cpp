@@ -10,6 +10,7 @@
 #include "network/NetworkConfigService.hpp"
 #include "trdp/ConfigService.hpp"
 #include "trdp/TrdpEngine.hpp"
+#include "util/LogService.hpp"
 
 namespace trdp::http {
 
@@ -56,14 +57,38 @@ std::optional<stack::PdMessage> findPdById(const std::vector<stack::PdMessage> &
     return std::nullopt;
 }
 
+int queryInt(const httplib::Request &req, const std::string &name, int default_value) {
+    if (!req.has_param(name)) {
+        return default_value;
+    }
+    try {
+        return std::stoi(req.get_param_value(name));
+    } catch (...) {
+        return default_value;
+    }
+}
+
+std::optional<std::string> queryString(const httplib::Request &req, const std::string &name) {
+    if (!req.has_param(name)) {
+        return std::nullopt;
+    }
+    auto value = req.get_param_value(name);
+    if (value.empty()) {
+        return std::nullopt;
+    }
+    return value;
+}
+
 }  // namespace
 
 HttpRouter::HttpRouter(auth::AuthManager &auth_manager, config::ConfigService &config_service,
-                       network::NetworkConfigService &network_config_service, stack::TrdpEngine &trdp_engine)
+                       network::NetworkConfigService &network_config_service, stack::TrdpEngine &trdp_engine,
+                       util::LogService &log_service)
     : auth_manager_(auth_manager),
       config_service_(config_service),
       network_config_service_(network_config_service),
-      trdp_engine_(trdp_engine) {}
+      trdp_engine_(trdp_engine),
+      log_service_(log_service) {}
 
 void HttpRouter::registerRoutes(httplib::Server &server) {
     registerHealthEndpoint(server);
@@ -71,6 +96,7 @@ void HttpRouter::registerRoutes(httplib::Server &server) {
     config_service_.registerRoutes(server);
     registerNetworkConfigEndpoints(server);
     registerTrdpEngineEndpoints(server);
+    registerLogEndpoints(server);
 }
 
 void HttpRouter::registerHealthEndpoint(httplib::Server &server) {
@@ -219,7 +245,7 @@ void HttpRouter::registerTrdpEngineEndpoints(httplib::Server &server) {
             res.set_content(json::error("payload_hex is required"), "application/json");
             return;
         }
-        auto payload_bytes = json::parseHex(*payload_hex);
+        auto payload_bytes = json::hexToBlob(*payload_hex);
         if (!payload_bytes) {
             res.status = 400;
             res.set_content(json::error("payload_hex must be an even-length hex string"), "application/json");
@@ -272,7 +298,7 @@ void HttpRouter::registerTrdpEngineEndpoints(httplib::Server &server) {
             return;
         }
 
-        auto payload_bytes = json::parseHex(*payload_hex);
+        auto payload_bytes = json::hexToBlob(*payload_hex);
         if (!payload_bytes) {
             res.status = 400;
             res.set_content(json::error("payload_hex must be an even-length hex string"), "application/json");
@@ -300,6 +326,69 @@ void HttpRouter::registerTrdpEngineEndpoints(httplib::Server &server) {
         auto messages = trdp_engine_.listIncomingMd();
         res.status = 200;
         res.set_content(json::mdIncomingListJson(messages), "application/json");
+    });
+}
+
+void HttpRouter::registerLogEndpoints(httplib::Server &server) {
+    server.Get("/api/logs/trdp", [this](const httplib::Request &req, httplib::Response &res) {
+        auto user = auth_manager_.userFromRequest(req);
+        if (!user) {
+            res.status = 401;
+            res.set_content(json::error("authentication required"), "application/json");
+            return;
+        }
+
+        int limit = queryInt(req, "limit", 100);
+        int offset = queryInt(req, "offset", 0);
+        if (limit <= 0) {
+            limit = 1;
+        }
+        if (limit > 500) {
+            limit = 500;
+        }
+        if (offset < 0) {
+            offset = 0;
+        }
+
+        try {
+            auto logs = log_service_.getTrdpLogs(limit, offset, queryString(req, "type"),
+                                                 queryString(req, "direction"));
+            res.status = 200;
+            res.set_content(json::trdpLogListJson(logs), "application/json");
+        } catch (const std::exception &ex) {
+            res.status = 500;
+            res.set_content(json::error(ex.what()), "application/json");
+        }
+    });
+
+    server.Get("/api/logs/app", [this](const httplib::Request &req, httplib::Response &res) {
+        auto user = auth_manager_.userFromRequest(req);
+        if (!user) {
+            res.status = 401;
+            res.set_content(json::error("authentication required"), "application/json");
+            return;
+        }
+
+        int limit = queryInt(req, "limit", 100);
+        int offset = queryInt(req, "offset", 0);
+        if (limit <= 0) {
+            limit = 1;
+        }
+        if (limit > 500) {
+            limit = 500;
+        }
+        if (offset < 0) {
+            offset = 0;
+        }
+
+        try {
+            auto logs = log_service_.getAppLogs(limit, offset, queryString(req, "level"));
+            res.status = 200;
+            res.set_content(json::appLogListJson(logs), "application/json");
+        } catch (const std::exception &ex) {
+            res.status = 500;
+            res.set_content(json::error(ex.what()), "application/json");
+        }
     });
 }
 

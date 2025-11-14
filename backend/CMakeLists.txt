@@ -29,6 +29,7 @@ set(TRDP_APP_SOURCES
     src/trdp/TrdpConfigService.cpp
     src/network/NetworkConfigService.cpp
     src/util/Logger.cpp
+    src/util/LogService.cpp
 )
 
 add_executable(trdp_app ${TRDP_APP_SOURCES})

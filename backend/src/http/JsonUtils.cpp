@@ -5,6 +5,7 @@
 #include <sstream>
 
 #include "trdp/TrdpEngine.hpp"
+#include "util/LogService.hpp"
 
 namespace trdp::http::json {
 
@@ -17,6 +18,21 @@ std::string trimCopy(const std::string &value) {
     }
     const auto end = value.find_last_not_of(" \t\n\r");
     return value.substr(begin, end - begin + 1);
+}
+
+std::string bytesToHexSpan(const uint8_t *data, size_t size) {
+    if (data == nullptr || size == 0) {
+        return "";
+    }
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string hex;
+    hex.reserve(size * 2);
+    for (size_t i = 0; i < size; ++i) {
+        const uint8_t byte = data[i];
+        hex.push_back(kHex[(byte >> 4) & 0x0F]);
+        hex.push_back(kHex[byte & 0x0F]);
+    }
+    return hex;
 }
 
 }  // namespace
@@ -160,15 +176,16 @@ std::optional<std::vector<uint8_t>> parseHex(const std::string &hex) {
     return bytes;
 }
 
+std::optional<std::vector<uint8_t>> hexToBlob(const std::string &hex) {
+    return parseHex(hex);
+}
+
 std::string bytesToHex(const std::vector<uint8_t> &data) {
-    static constexpr char kHex[] = "0123456789abcdef";
-    std::string hex;
-    hex.reserve(data.size() * 2);
-    for (uint8_t byte : data) {
-        hex.push_back(kHex[(byte >> 4) & 0x0F]);
-        hex.push_back(kHex[byte & 0x0F]);
-    }
-    return hex;
+    return bytesToHexSpan(data.data(), data.size());
+}
+
+std::string blobToHex(const void *data, size_t size) {
+    return bytesToHexSpan(static_cast<const uint8_t *>(data), size);
 }
 
 std::string payloadAscii(const std::vector<uint8_t> &data) {
@@ -246,6 +263,40 @@ std::string mdSendResponseJson(const stack::MdMessage &message) {
     payload += "\"payload_hex\":\"" + bytesToHex(message.payload) + "\",";
     payload += "\"timestamp_utc\":\"" + escape(message.timestamp) + "\",";
     payload += "\"status\":\"sent\"}";
+    return payload;
+}
+
+std::string trdpLogListJson(const std::vector<util::TrdpLogEntry> &logs) {
+    std::string payload = "[";
+    for (size_t i = 0; i < logs.size(); ++i) {
+        if (i != 0) {
+            payload += ",";
+        }
+        payload += "{\"id\":" + std::to_string(logs[i].id) + ",";
+        payload += "\"direction\":\"" + escape(logs[i].direction) + "\",";
+        payload += "\"type\":\"" + escape(logs[i].type) + "\",";
+        payload += "\"msg_id\":" + std::to_string(logs[i].msg_id) + ",";
+        payload += "\"src_ip\":\"" + escape(logs[i].src_ip) + "\",";
+        payload += "\"dst_ip\":\"" + escape(logs[i].dst_ip) + "\",";
+        payload += "\"payload_hex\":\"" + blobToHex(logs[i].payload.data(), logs[i].payload.size()) + "\",";
+        payload += "\"timestamp_utc\":\"" + escape(logs[i].timestamp) + "\"}";
+    }
+    payload += "]";
+    return payload;
+}
+
+std::string appLogListJson(const std::vector<util::AppLogEntry> &logs) {
+    std::string payload = "[";
+    for (size_t i = 0; i < logs.size(); ++i) {
+        if (i != 0) {
+            payload += ",";
+        }
+        payload += "{\"id\":" + std::to_string(logs[i].id) + ",";
+        payload += "\"level\":\"" + escape(logs[i].level) + "\",";
+        payload += "\"message\":\"" + escape(logs[i].message) + "\",";
+        payload += "\"timestamp_utc\":\"" + escape(logs[i].timestamp) + "\"}";
+    }
+    payload += "]";
     return payload;
 }
 
