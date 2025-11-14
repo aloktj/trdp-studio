@@ -1,41 +1,90 @@
-# Prerequisites
-*.d
+# General
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.swp
+*.swo
 
-# Compiled Object files
-*.slo
+# C/C++ build outputs
+/build/
+/cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+compile_commands.json
+*.cmake
+*.a
+*.la
 *.lo
 *.o
 *.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
 *.so
 *.dylib
 *.dll
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
 *.exe
 *.out
 *.app
+*.lib
+*.pdb
+*.ilk
+*.manifest
+*.pch
+*.gcno
+*.gcda
+*.gcov
 
-# debug information files
-*.dwo
+# TCNopen submodule builds
+external/TCNopen/build/
+external/TCNopen/**/pkg/
+external/TCNopen/**/trdp/spy/src/trdp_spy*
+
+# Generated documentation and packaging
+/doc/
+/docs/
+*.deb
+*.rpm
+*.tar.gz
+*.tgz
+
+# Frontend / Node.js
+node_modules/
+build/
+dist/
+.npm/
+.pnp*
+yarn-error.log
+npm-debug.log*
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+.next/
+.svelte-kit/
+.vite/
+.eslintcache
+.storybook-out/
+coverage/
+
+# TypeScript
+*.tsbuildinfo
+
+# SQLite / runtime data
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-journal
+
+# IDE & tooling
+.idea/
+.vscode/
+*.code-workspace
+.clangd/
+.cache/
+.env
+.env.*
+
+# Python helper scripts (if used)
+__pycache__/
+*.pyc
+
