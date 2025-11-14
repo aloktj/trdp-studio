@@ -460,6 +460,11 @@ std::vector<MdMessage> TrdpEngine::listIncomingMd() const {
 }
 
 MdMessage TrdpEngine::sendMdMessage(const std::string &destination, const std::vector<uint8_t> &payload) {
+    return sendMdMessage(destination, 0, payload);
+}
+
+MdMessage TrdpEngine::sendMdMessage(const std::string &destination, int msg_id,
+                                    const std::vector<uint8_t> &payload) {
     if (!network_config_.has_value()) {
         throw std::runtime_error("Network configuration not loaded");
     }
@@ -488,6 +493,11 @@ MdMessage TrdpEngine::sendMdMessage(const std::string &destination, const std::v
         }
         runtime->last_payload = payload;
         message.id = next_md_id_++;
+        if (msg_id <= 0) {
+            msg_id = next_md_msg_id_++;
+        }
+        message.msg_id = msg_id;
+        runtime->last_message_id = message.msg_id;
         message.source = runtime->source;
         message.destination = runtime->destination;
         message.payload = payload;
@@ -502,9 +512,10 @@ MdMessage TrdpEngine::sendMdMessage(const std::string &destination, const std::v
         stack_adapter_->registerMdEndpoint(*runtime);
     }
     if (stack_ready_.load() && stack_adapter_) {
-        stack_adapter_->sendMd(*runtime, payload, message.id);
+        stack_adapter_->sendMd(*runtime, payload, message.msg_id);
     }
-    logTrdpEvent("OUT", "MD", message.id, extractIp(runtime->source), extractIp(runtime->destination), payload);
+    logTrdpEvent("OUT", "MD", message.msg_id, extractIp(runtime->source), extractIp(runtime->destination),
+                 payload);
     return message;
 }
 
@@ -682,14 +693,18 @@ void TrdpEngine::handleIncomingMd(int msg_id, const std::vector<uint8_t> &payloa
                                   const std::string &dst_ip) {
     std::lock_guard<std::mutex> lock(state_mutex_);
     MdMessage message;
-    message.id = msg_id == 0 ? next_md_id_++ : msg_id;
+    message.id = next_md_id_++;
+    if (msg_id <= 0) {
+        msg_id = next_md_msg_id_++;
+    }
+    message.msg_id = msg_id;
     message.source = src_ip;
     message.destination = dst_ip;
     message.payload = payload;
     message.timestamp = nowIso8601();
     incoming_md_index_[message.id] = incoming_md_.size();
     incoming_md_.push_back(message);
-    logTrdpEvent("IN", "MD", message.id, src_ip, dst_ip, payload);
+    logTrdpEvent("IN", "MD", message.msg_id, src_ip, dst_ip, payload);
 }
 
 void TrdpEngine::logTrdpEvent(const std::string &direction, const std::string &type, int msg_id,
@@ -775,6 +790,7 @@ void TrdpEngine::clearAllStateLocked() {
     md_runtime_.clear();
     next_pd_id_ = 1;
     next_md_id_ = 1;
+    next_md_msg_id_ = 1;
     next_md_runtime_id_ = 1;
 }
 

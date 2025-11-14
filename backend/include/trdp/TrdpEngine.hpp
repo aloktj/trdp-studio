@@ -29,6 +29,7 @@ struct PdMessage {
 
 struct MdMessage {
     int id {0};
+    int msg_id {0};
     std::string source;
     std::string destination;
     std::vector<uint8_t> payload;
@@ -51,6 +52,8 @@ public:
     std::vector<MdMessage> listOutgoingMd() const;
     std::vector<MdMessage> listIncomingMd() const;
     MdMessage sendMdMessage(const std::string &destination, const std::vector<uint8_t> &payload);
+    MdMessage sendMdMessage(const std::string &destination, int msg_id,
+                           const std::vector<uint8_t> &payload);
 
 private:
     struct PdRuntimeState;
@@ -97,6 +100,7 @@ private:
     std::unordered_map<int, std::shared_ptr<MdRuntimeState>> md_runtime_;
     int next_pd_id_ {1};
     int next_md_id_ {1};
+    int next_md_msg_id_ {1};
     int next_md_runtime_id_ {1};
     db::Database *database_ {nullptr};
     std::unique_ptr<TrdpStackAdapter> stack_adapter_;

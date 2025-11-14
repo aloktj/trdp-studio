@@ -22,6 +22,7 @@ set(TRDP_APP_SOURCES
     src/auth/AuthService.cpp
     src/auth/PasswordHasher.cpp
     src/auth/AuthManager.cpp
+    src/http/JsonUtils.cpp
     src/http/HttpRouter.cpp
     src/trdp/TrdpEngine.cpp
     src/trdp/ConfigService.cpp
