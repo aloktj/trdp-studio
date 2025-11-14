@@ -9,6 +9,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 include(FetchContent)
 find_package(SQLite3 REQUIRED)
+find_package(TRDP REQUIRED)
 
 option(TRDP_AUTO_SETUP "Download and stage the TRDP stack during configure" OFF)
 set(TRDP_SETUP_PREFIX "${CMAKE_BINARY_DIR}/trdp-install" CACHE PATH
