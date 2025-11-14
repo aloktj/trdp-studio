@@ -53,6 +53,7 @@ private:
     void registerFrontendEndpoints(httplib::Server &server);
 
     bool serveFrontendAsset(const httplib::Request &req, httplib::Response &res) const;
+    void respondFrontendMissing(httplib::Response &res) const;
     std::string locateFrontendRoot() const;
     static std::string detectMimeType(const std::string &extension);
     static bool isApiRequest(const std::string &path);

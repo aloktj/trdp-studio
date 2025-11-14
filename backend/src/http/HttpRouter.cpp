@@ -469,14 +469,18 @@ void HttpRouter::registerAccountEndpoints(httplib::Server &server) {
 void HttpRouter::registerFrontendEndpoints(httplib::Server &server) {
     frontend_root_ = locateFrontendRoot();
     if (frontend_root_.empty()) {
-        std::cerr << "[HttpRouter] Frontend dist folder not found. Serving API only." << std::endl;
+        std::cerr << "[HttpRouter] Frontend dist folder not found. Serving fallback page." << std::endl;
         frontend_available_ = false;
-        return;
+    } else {
+        frontend_available_ = true;
     }
 
-    frontend_available_ = true;
     server.Get(R"(^/(?!api/)(?!health$).*)", [this](const httplib::Request &req, httplib::Response &res) {
-        if (serveFrontendAsset(req, res)) {
+        if (frontend_available_ && serveFrontendAsset(req, res)) {
+            return;
+        }
+        if (!frontend_available_) {
+            respondFrontendMissing(res);
             return;
         }
         res.status = 404;
@@ -516,6 +520,32 @@ bool HttpRouter::serveFrontendAsset(const httplib::Request &req, httplib::Respon
     buffer << file.rdbuf();
     res.set_content(buffer.str(), detectMimeType(target.extension().string()));
     return true;
+}
+
+void HttpRouter::respondFrontendMissing(httplib::Response &res) const {
+    static constexpr const char *kMessage = R"HTML(<html>
+    <head>
+        <meta charset="utf-8" />
+        <title>TRDP Studio</title>
+        <style>
+            body { font-family: sans-serif; padding: 2rem; background: #0b1320; color: #f2f2f2; }
+            pre { background: rgba(255,255,255,0.05); padding: 1rem; border-radius: 4px; }
+            a { color: #8fd3ff; }
+        </style>
+    </head>
+    <body>
+        <h1>TRDP Studio UI not built yet</h1>
+        <p>The backend is running, but it could not find the compiled React bundle under <code>frontend/dist</code>.</p>
+        <p>To build the web UI locally and make this page go away, run:</p>
+        <pre>cd frontend
+npm install
+npm run build</pre>
+        <p>Then restart <code>trdp_app</code> from the backend build directory. After that, reload this page.</p>
+        <p>If you prefer the dev server, run <code>npm run dev</code> in <code>frontend/</code> and open <a href="http://localhost:5173" target="_blank">http://localhost:5173</a>.</p>
+    </body>
+</html>)HTML";
+    res.status = 200;
+    res.set_content(kMessage, "text/html; charset=utf-8");
 }
 
 std::string HttpRouter::locateFrontendRoot() const {
