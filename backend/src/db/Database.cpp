@@ -40,6 +40,14 @@ void Database::initializeSchema() {
         "id INTEGER PRIMARY KEY CHECK(id = 1),"
         "xml_config_id INTEGER,"
         "FOREIGN KEY(xml_config_id) REFERENCES xml_configs(id));",
+        "CREATE TABLE IF NOT EXISTS network_config ("
+        "id INTEGER PRIMARY KEY CHECK(id = 1),"
+        "interface_name TEXT,"
+        "local_ip TEXT,"
+        "multicast_groups TEXT,"
+        "pd_port INTEGER,"
+        "md_port INTEGER,"
+        "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);",
         "CREATE TABLE IF NOT EXISTS trdp_logs ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT,"
         "direction TEXT NOT NULL,"

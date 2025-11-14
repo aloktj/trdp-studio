@@ -12,21 +12,34 @@ namespace trdp::config {
 class ConfigService;
 }
 
+namespace trdp::network {
+class NetworkConfigService;
+}
+
+namespace trdp::stack {
+class TrdpEngine;
+}
+
 namespace trdp::http {
 
 // HttpRouter wires up all REST endpoints in a single place to keep the
 // main entry point minimal.
 class HttpRouter {
 public:
-    HttpRouter(auth::AuthManager &auth_manager, config::ConfigService &config_service);
+    HttpRouter(auth::AuthManager &auth_manager, config::ConfigService &config_service,
+               network::NetworkConfigService &network_config_service, stack::TrdpEngine &trdp_engine);
 
     void registerRoutes(httplib::Server &server);
 
 private:
     void registerHealthEndpoint(httplib::Server &server);
+    void registerNetworkConfigEndpoints(httplib::Server &server);
+    void registerTrdpEngineEndpoints(httplib::Server &server);
 
     auth::AuthManager &auth_manager_;
     config::ConfigService &config_service_;
+    network::NetworkConfigService &network_config_service_;
+    stack::TrdpEngine &trdp_engine_;
 };
 
 }  // namespace trdp::http
