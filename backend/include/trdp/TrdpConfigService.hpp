@@ -26,6 +26,7 @@ public:
     std::vector<TrdpConfig> listConfigsForUser(long long user_id);
     TrdpConfig createConfig(long long user_id, const std::string &name, const std::string &xml_content);
     std::optional<TrdpConfig> getConfigById(long long id);
+    std::optional<TrdpConfig> getActiveConfig();
     void setActiveConfig(long long config_id);
 
 private:
