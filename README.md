@@ -41,6 +41,13 @@ The TRDP XML configuration selected by the user
 
 Everything else is the same executable.
 
+📁 `config/` reference data
+
+The repository ships with a canonical TRDP XML configuration stored at `config/reference-trdp-config.xml`.
+It represents a minimal yet fully valid device description (device + datasets + interface telegrams) so the
+backend can parse and validate TRDP content even on a clean checkout. Use this file when you need a known-good
+input for development, tests, or demos of the XML upload APIs.
+
 
 ---
 
