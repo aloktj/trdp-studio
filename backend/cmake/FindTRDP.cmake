@@ -27,6 +27,17 @@ find_path(TRDP_INCLUDE_DIR
     PATH_SUFFIXES include include/trdp
 )
 
+# If the headers live under an include/trdp/ directory (the default layout
+# produced by backend/third_party/TRDP_INSTALL_LINUX.md), expose the parent
+# include/ directory to consumers so they can include files via "trdp/*.h".
+set(_TRDP_INTERFACE_INCLUDE_DIR "${TRDP_INCLUDE_DIR}")
+if(_TRDP_INTERFACE_INCLUDE_DIR)
+    get_filename_component(_TRDP_DIR_NAME "${_TRDP_INTERFACE_INCLUDE_DIR}" NAME)
+    if(_TRDP_DIR_NAME STREQUAL "trdp")
+        get_filename_component(_TRDP_INTERFACE_INCLUDE_DIR "${_TRDP_INTERFACE_INCLUDE_DIR}" DIRECTORY)
+    endif()
+endif()
+
 find_library(TRDP_LIBRARY NAMES trdp libtrdp
     HINTS ${_TRDP_HINTS}
     PATH_SUFFIXES lib
@@ -49,7 +60,7 @@ if(TRDP_FOUND)
         add_library(TRDP::trdp STATIC IMPORTED)
         set_target_properties(TRDP::trdp PROPERTIES
             IMPORTED_LOCATION "${TRDP_LIBRARY}"
-            INTERFACE_INCLUDE_DIRECTORIES "${TRDP_INCLUDE_DIR}"
+            INTERFACE_INCLUDE_DIRECTORIES "${_TRDP_INTERFACE_INCLUDE_DIR}"
         )
     endif()
 
@@ -59,7 +70,7 @@ if(TRDP_FOUND)
         set_target_properties(TRDP::trdpap PROPERTIES
             IMPORTED_LOCATION "${TRDPAP_LIBRARY}"
             INTERFACE_LINK_LIBRARIES TRDP::trdp
-            INTERFACE_INCLUDE_DIRECTORIES "${TRDP_INCLUDE_DIR}"
+            INTERFACE_INCLUDE_DIRECTORIES "${_TRDP_INTERFACE_INCLUDE_DIR}"
         )
     endif()
 
