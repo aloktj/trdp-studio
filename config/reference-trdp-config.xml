@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<trdp-config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xsi:noNamespaceSchemaLocation="trdp-config.xsd">
+  <device-configuration>
+    <device name="StudioDevice" description="Reference TRDP configuration used by the TRDP Studio backend"
+            order-number="STUDIO-REF" revision="1.0" />
+    <mem-block-list>
+      <mem-block name="system" size="65536" type="SYSTEM" behaviour="block" />
+      <mem-block name="pd" size="262144" type="PD" behaviour="block" />
+      <mem-block name="md" size="262144" type="MD" behaviour="block" />
+    </mem-block-list>
+    <dbg-config>
+      <log-level console="warning" file="info" />
+    </dbg-config>
+    <com-parameter-list>
+      <pd-com-parameter name="pdDefault" ttl="64" to-behavior="keep-last-value">
+        <send-parameter retries="2" timeout="1000000" />
+      </pd-com-parameter>
+      <md-com-parameter name="mdDefault" confirm-timeout="2000000" reply-timeout="2000000">
+        <send-parameter retries="2" timeout="2000000" />
+      </md-com-parameter>
+    </com-parameter-list>
+    <dataset-list>
+      <dataset name="HeartbeatDataset" dataset-id="1">
+        <element name="counter" type="uint32" />
+      </dataset>
+      <dataset name="DiagnosticDataset" dataset-id="2">
+        <element name="status" type="uint16" />
+        <element name="detail" type="string" size="32" />
+      </dataset>
+    </dataset-list>
+    <bus-interface-list>
+      <bus-interface name="if1">
+        <process-config host-name="studio-device" leader-name="studio-leader" cycle-time="100000" />
+        <pd-defaults com-parameter="pdDefault" interval="50" redundancy="0" timeout="100000" />
+        <md-defaults com-parameter="mdDefault" timeout="2000000" />
+        <telegram-list>
+          <telegram name="HeartbeatPublisher" type="pd" direction="publisher" com-id="1000" dataset-id="1" cycle="50">
+            <source endpoint="192.168.1.10:17224" />
+            <destination endpoint="239.0.0.1:17224" />
+            <payload>01020304</payload>
+          </telegram>
+          <telegram name="HeartbeatSubscriber" type="pd" direction="subscriber" com-id="1000" dataset-id="1" timeout="200"
+                     filter="default">
+            <source endpoint="239.0.0.1:17224" />
+            <destination endpoint="192.168.1.10:17224" />
+          </telegram>
+          <telegram name="DiagnosticResponder" type="md" direction="responder" com-id="2000" dataset-id="2"
+                     timeout="5000">
+            <source endpoint="192.168.1.10:17225" />
+            <destination endpoint="192.168.1.20:17225" />
+          </telegram>
+        </telegram-list>
+      </bus-interface>
+    </bus-interface-list>
+  </device-configuration>
+</trdp-config>

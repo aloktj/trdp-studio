@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace httplib {
 class Server;
@@ -16,6 +17,7 @@ class AuthManager;
 namespace trdp::config {
 class TrdpConfigService;
 struct TrdpConfig;
+struct TrdpPlanSection;
 
 // ConfigService exposes REST APIs for TRDP XML configuration management.
 class ConfigService {
@@ -29,6 +31,7 @@ private:
     void handleCreateConfig(const httplib::Request &req, httplib::Response &res);
     void handleGetConfig(const httplib::Request &req, httplib::Response &res);
     void handleActivateConfig(const httplib::Request &req, httplib::Response &res);
+    void handlePlanForConfig(const httplib::Request &req, httplib::Response &res);
 
     std::optional<long long> requireUserId(const httplib::Request &req, httplib::Response &res);
     static std::optional<std::string> extractJsonField(const std::string &body, const std::string &field_name);
@@ -36,6 +39,7 @@ private:
     static std::string jsonError(const std::string &message);
     static std::string serializeConfigMetadata(const TrdpConfig &config);
     static std::string serializeConfigWithXml(const TrdpConfig &config);
+    static std::string serializePlanSections(const std::vector<TrdpPlanSection> &sections);
 
     auth::AuthManager &auth_manager_;
     TrdpConfigService &config_service_;

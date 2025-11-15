@@ -41,7 +41,11 @@ if(TRDP_AUTO_SETUP)
     endif()
 endif()
 
-find_package(TRDP REQUIRED)
+find_package(TRDP QUIET)
+
+if(NOT TRDP_FOUND)
+    message(STATUS "TRDP SDK was not found; building without native TRDP integration")
+endif()
 
 FetchContent_Declare(
     cpp_httplib
@@ -62,6 +66,7 @@ set(TRDP_APP_SOURCES
     src/trdp/TrdpEngine.cpp
     src/trdp/ConfigService.cpp
     src/trdp/TrdpConfigService.cpp
+    src/trdp/PlanBuilder.cpp
     src/trdp/TrdpXmlParser.cpp
     src/trdp/XmlUtils.cpp
     src/network/NetworkConfigService.cpp

@@ -3,10 +3,13 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "auth/AuthManager.hpp"
 #include "httplib.h"
+#include "trdp/PlanBuilder.hpp"
 #include "trdp/TrdpConfigService.hpp"
+#include "trdp/TrdpXmlParser.hpp"
 
 namespace trdp::config {
 namespace {
@@ -40,6 +43,10 @@ void ConfigService::registerRoutes(httplib::Server &server) {
 
     server.Post(R"(/api/trdp/configs/(\d+)/activate)", [this](const httplib::Request &req, httplib::Response &res) {
         handleActivateConfig(req, res);
+    });
+
+    server.Get(R"(/api/trdp/configs/(\d+)/plan)", [this](const httplib::Request &req, httplib::Response &res) {
+        handlePlanForConfig(req, res);
     });
 }
 
@@ -154,6 +161,46 @@ void ConfigService::handleActivateConfig(const httplib::Request &req, httplib::R
     }
 }
 
+void ConfigService::handlePlanForConfig(const httplib::Request &req, httplib::Response &res) {
+    auto user_id = requireUserId(req, res);
+    if (!user_id) {
+        return;
+    }
+
+    auto config_id = parseId(req);
+    if (!config_id) {
+        res.status = 400;
+        res.set_content(jsonError("invalid config id"), "application/json");
+        return;
+    }
+
+    try {
+        auto config = config_service_.getConfigById(*config_id);
+        if (!config || config->user_id != *user_id) {
+            res.status = 404;
+            res.set_content(jsonError("config not found"), "application/json");
+            return;
+        }
+
+        std::string error;
+        auto parsed = parseTrdpXmlConfig(config->xml_content, &error);
+        if (!parsed) {
+            res.status = 422;
+            res.set_content(jsonError(error.empty() ? "Failed to parse TRDP XML" : error), "application/json");
+            return;
+        }
+
+        TrdpPlanBuilder builder;
+        auto plan = builder.buildPlan(*parsed);
+        std::string payload = serializePlanSections(plan);
+        res.status = 200;
+        res.set_content(payload, "application/json");
+    } catch (const std::exception &ex) {
+        res.status = 500;
+        res.set_content(jsonError(ex.what()), "application/json");
+    }
+}
+
 std::optional<long long> ConfigService::requireUserId(const httplib::Request &req, httplib::Response &res) {
     auto user = auth_manager_.userFromRequest(req);
     if (!user) {
@@ -233,6 +280,35 @@ std::string ConfigService::serializeConfigWithXml(const TrdpConfig &config) {
            "\",\"xml\":\"" + escapeJson(config.xml_content) +
            "\",\"validation_status\":\"" + escapeJson(config.validation_status) +
            "\",\"created_at\":\"" + escapeJson(config.created_at) + "\"}";
+}
+
+std::string ConfigService::serializePlanSections(const std::vector<TrdpPlanSection> &sections) {
+    std::string json = "{\"plan\":[";
+    for (std::size_t i = 0; i < sections.size(); ++i) {
+        const auto &section = sections[i];
+        if (i != 0) {
+            json += ",";
+        }
+        json += "{\"name\":\"" + escapeJson(section.name) + "\",\"steps\":[";
+        for (std::size_t j = 0; j < section.steps.size(); ++j) {
+            const auto &step = section.steps[j];
+            if (j != 0) {
+                json += ",";
+            }
+            json += "{\"title\":\"" + escapeJson(step.title) + "\",\"description\":\"" +
+                    escapeJson(step.description) + "\",\"api_calls\":[";
+            for (std::size_t k = 0; k < step.api_calls.size(); ++k) {
+                if (k != 0) {
+                    json += ",";
+                }
+                json += "\"" + escapeJson(step.api_calls[k]) + "\"";
+            }
+            json += "]}";
+        }
+        json += "]}";
+    }
+    json += "],\"sections\":" + std::to_string(sections.size()) + "}";
+    return json;
 }
 
 }  // namespace trdp::config
