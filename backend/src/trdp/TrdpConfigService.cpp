@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "db/Database.hpp"
+#include "trdp/xml/TrdpXmlLoader.hpp"
 
 namespace trdp::config {
 namespace {
