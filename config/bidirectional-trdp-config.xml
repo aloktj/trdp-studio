@@ -1,64 +1,74 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<trdp-config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-             xsi:noNamespaceSchemaLocation="trdp-config.xsd">
-  <device-configuration>
-    <device name="StudioDevice" description="TRDP configuration with incoming/outgoing PD & MD telegrams"
-            order-number="STUDIO-BIDIR" revision="1.0" />
-    <mem-block-list>
-      <mem-block name="system" size="65536" type="SYSTEM" behaviour="block" />
-      <mem-block name="pd" size="262144" type="PD" behaviour="block" />
-      <mem-block name="md" size="262144" type="MD" behaviour="block" />
-    </mem-block-list>
-    <dbg-config>
-      <log-level console="info" file="debug" />
-    </dbg-config>
-    <com-parameter-list>
-      <pd-com-parameter name="pdDefault" ttl="64" to-behavior="keep-last-value">
-        <send-parameter retries="2" timeout="1000000" />
-      </pd-com-parameter>
-      <md-com-parameter name="mdDefault" confirm-timeout="2000000" reply-timeout="2000000">
-        <send-parameter retries="2" timeout="2000000" />
-      </md-com-parameter>
-    </com-parameter-list>
-    <dataset-list>
-      <dataset name="TemperatureDataset" dataset-id="10">
-        <element name="temperature" type="real32" />
-        <element name="humidity" type="real32" />
-      </dataset>
-      <dataset name="CommandDataset" dataset-id="20">
-        <element name="command" type="string" size="32" />
-        <element name="value" type="uint32" />
-      </dataset>
-    </dataset-list>
+<device xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="trdp-config.xsd"
+        host-name="studio-bidir" leader-name="studio-leader" type="demo">
+    <device-configuration memory-size="131072">
+        <mem-block-list>
+            <mem-block size="32" preallocate="1024" />
+            <mem-block size="72" preallocate="512" />
+            <mem-block size="128" preallocate="256" />
+        </mem-block-list>
+    </device-configuration>
+
     <bus-interface-list>
-      <bus-interface name="loopback">
-        <process-config host-name="studio-device" leader-name="studio-leader" cycle-time="100000" />
-        <pd-defaults com-parameter="pdDefault" interval="100" redundancy="0" timeout="200000" />
-        <md-defaults com-parameter="mdDefault" timeout="4000000" />
-        <telegram-list>
-          <!-- PD outgoing example -->
-          <telegram name="TemperaturePublisher" type="pd" direction="publisher" com-id="6000" dataset-id="10" cycle="100">
-            <source endpoint="192.168.10.10:17224" />
-            <destination endpoint="239.10.10.1:17224" />
-            <payload>00000000</payload>
-          </telegram>
-          <!-- PD incoming example -->
-          <telegram name="TemperatureSubscriber" type="pd" direction="subscriber" com-id="6000" dataset-id="10" timeout="400">
-            <source endpoint="239.10.10.1:17224" />
-            <destination endpoint="192.168.10.10:17224" />
-          </telegram>
-          <!-- MD outgoing example -->
-          <telegram name="CommandRequester" type="md" direction="publisher" com-id="7000" dataset-id="20" timeout="5000">
-            <source endpoint="192.168.10.10:17225" />
-            <destination endpoint="192.168.10.20:17225" />
-          </telegram>
-          <!-- MD incoming example -->
-          <telegram name="CommandListener" type="md" direction="listener" com-id="7001" dataset-id="20" timeout="5000">
-            <source endpoint="192.168.10.20:17225" />
-            <destination endpoint="192.168.10.10:17225" />
-          </telegram>
-        </telegram-list>
-      </bus-interface>
+        <bus-interface network-id="1" name="loopback" host-ip="127.0.0.1">
+            <trdp-process blocking="no" cycle-time="100000" priority="80" traffic-shaping="on" />
+            <pd-com-parameter marshall="on" port="17224" qos="5" ttl="64" timeout-value="1000000" validity-behavior="zero" />
+            <md-com-parameter udp-port="17225" tcp-port="17225" confirm-timeout="1000000" connect-timeout="60000000"
+                              reply-timeout="5000000" marshall="off" protocol="UDP" qos="3" retries="2" ttl="64" />
+
+            <!-- PD publisher (outgoing table) -->
+            <telegram name="pdPublisher" direction="publisher" com-id="6100" data-set-id="900" com-parameter-id="1">
+                <pd-parameter cycle="200000" marshall="off" timeout="400000" validity-behavior="keep" />
+                <destination id="1" uri="239.1.1.10" />
+            </telegram>
+
+            <!-- PD subscriber (incoming table) -->
+            <telegram name="pdSubscriber" direction="subscriber" com-id="6101" data-set-id="901" com-parameter-id="1">
+                <pd-parameter cycle="200000" marshall="off" timeout="400000" validity-behavior="zero" />
+                <source id="1" uri="239.1.1.11" />
+            </telegram>
+
+            <!-- MD responder (outgoing table) -->
+            <telegram name="mdResponder" direction="responder" com-id="7100" data-set-id="920" com-parameter-id="2">
+                <md-parameter confirm-timeout="500000" connect-timeout="2000000" reply-timeout="1000000" retries="1" />
+                <destination id="1" uri="239.1.1.20" />
+            </telegram>
+
+            <!-- MD listener (incoming table) -->
+            <telegram name="mdListener" direction="listener" com-id="7101" data-set-id="921" com-parameter-id="2">
+                <md-parameter confirm-timeout="500000" connect-timeout="2000000" reply-timeout="1000000" retries="1" />
+                <source id="1" uri="239.1.1.21" />
+            </telegram>
+        </bus-interface>
     </bus-interface-list>
-  </device-configuration>
-</trdp-config>
+
+    <mapped-device-list>
+    </mapped-device-list>
+
+    <com-parameter-list>
+        <com-parameter id="1" qos="5" ttl="64" />
+        <com-parameter id="2" qos="3" ttl="64" />
+    </com-parameter-list>
+
+    <data-set-list>
+        <data-set name="PdPublishDataset" id="900">
+            <element name="temperature" type="REAL32" />
+            <element name="humidity" type="REAL32" />
+        </data-set>
+        <data-set name="PdSubscribeDataset" id="901">
+            <element name="velocity" type="REAL32" />
+            <element name="pressure" type="REAL32" />
+        </data-set>
+        <data-set name="MdResponderDataset" id="920">
+            <element name="command" type="UINT32" />
+            <element name="argument" type="UINT16" />
+        </data-set>
+        <data-set name="MdListenerDataset" id="921">
+            <element name="status" type="UINT16" />
+            <element name="message" type="STRING" size="32" />
+        </data-set>
+    </data-set-list>
+
+    <debug file-name="trdp-bidir.log" file-size="1000000" info="DTFC" level="I" />
+</device>
