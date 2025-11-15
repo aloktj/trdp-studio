@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "db/Database.hpp"
+#include "trdp/xml/TrdpXmlLoader.hpp"
 
 namespace trdp::config {
 namespace {
@@ -130,9 +131,18 @@ void TrdpConfigService::setActiveConfig(long long config_id) {
 }
 
 std::string TrdpConfigService::validateXml(const std::string &xml_content) {
-    (void)xml_content;
-    // TODO: call real TRDP validation
-    return "PASS";
+    try {
+        trdp::xml::TrdpXmlLoader loader;
+        auto parsed = loader.parse(xml_content);
+        if (!parsed.hasStructuredTelegrams()) {
+            return "FAIL: no telegram definitions found";
+        }
+        return "PASS";
+    } catch (const trdp::xml::TrdpXmlLoaderError &ex) {
+        return std::string("FAIL: ") + ex.what();
+    } catch (const std::exception &ex) {
+        return std::string("FAIL: unexpected error: ") + ex.what();
+    }
 }
 
 }  // namespace trdp::config
