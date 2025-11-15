@@ -1,5 +1,6 @@
 #include "trdp/ConfigService.hpp"
 
+#include <cctype>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -16,6 +17,150 @@
 
 namespace trdp::config {
 namespace {
+int hexDigit(char ch) {
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'f') {
+        return 10 + (ch - 'a');
+    }
+    if (ch >= 'A' && ch <= 'F') {
+        return 10 + (ch - 'A');
+    }
+    return -1;
+}
+
+void appendUtf8(char32_t codepoint, std::string &out) {
+    if (codepoint <= 0x7F) {
+        out.push_back(static_cast<char>(codepoint));
+    } else if (codepoint <= 0x7FF) {
+        out.push_back(static_cast<char>(0xC0 | ((codepoint >> 6) & 0x1F)));
+        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    } else if (codepoint <= 0xFFFF) {
+        out.push_back(static_cast<char>(0xE0 | ((codepoint >> 12) & 0x0F)));
+        out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    } else {
+        out.push_back(static_cast<char>(0xF0 | ((codepoint >> 18) & 0x07)));
+        out.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    }
+}
+
+bool appendUnicodeEscape(const std::string &body, size_t &cursor, std::string &out) {
+    auto decodeCodeUnit = [&](size_t start, char32_t &unit) {
+        if (start + 4 > body.size()) {
+            return false;
+        }
+        unit = 0;
+        for (size_t i = start; i < start + 4; ++i) {
+            int digit = hexDigit(body[i]);
+            if (digit < 0) {
+                return false;
+            }
+            unit = static_cast<char32_t>((unit << 4) | digit);
+        }
+        return true;
+    };
+
+    size_t first_unit_pos = cursor + 1;
+    char32_t code_unit = 0;
+    if (!decodeCodeUnit(first_unit_pos, code_unit)) {
+        return false;
+    }
+    cursor = first_unit_pos + 3;
+
+    if (code_unit >= 0xD800 && code_unit <= 0xDBFF) {
+        size_t next = cursor + 1;
+        if (next + 1 >= body.size() || body[next] != '\\' || body[next + 1] != 'u') {
+            return false;
+        }
+        next += 2;
+        char32_t low_unit = 0;
+        if (!decodeCodeUnit(next, low_unit)) {
+            return false;
+        }
+        if (low_unit < 0xDC00 || low_unit > 0xDFFF) {
+            return false;
+        }
+        cursor = next + 3;
+        char32_t codepoint = 0x10000 + (((code_unit - 0xD800) << 10) | (low_unit - 0xDC00));
+        appendUtf8(codepoint, out);
+        return true;
+    }
+
+    if (code_unit >= 0xDC00 && code_unit <= 0xDFFF) {
+        return false;
+    }
+
+    appendUtf8(code_unit, out);
+    return true;
+}
+
+std::optional<std::string> parseJsonStringToken(const std::string &body, size_t start_quote) {
+    if (start_quote >= body.size() || body[start_quote] != '"') {
+        return std::nullopt;
+    }
+    std::string value;
+    value.reserve(body.size() - start_quote);
+    bool escaping = false;
+    size_t cursor = start_quote + 1;
+    while (cursor < body.size()) {
+        char ch = body[cursor];
+        if (escaping) {
+            escaping = false;
+            switch (ch) {
+                case '"':
+                    value.push_back('"');
+                    break;
+                case '\\':
+                    value.push_back('\\');
+                    break;
+                case '/':
+                    value.push_back('/');
+                    break;
+                case 'b':
+                    value.push_back('\b');
+                    break;
+                case 'f':
+                    value.push_back('\f');
+                    break;
+                case 'n':
+                    value.push_back('\n');
+                    break;
+                case 'r':
+                    value.push_back('\r');
+                    break;
+                case 't':
+                    value.push_back('\t');
+                    break;
+                case 'u':
+                    if (!appendUnicodeEscape(body, cursor, value)) {
+                        return std::nullopt;
+                    }
+                    ++cursor;
+                    continue;
+                default:
+                    return std::nullopt;
+            }
+            ++cursor;
+            continue;
+        }
+        if (ch == '\\') {
+            escaping = true;
+            ++cursor;
+            continue;
+        }
+        if (ch == '"') {
+            return value;
+        }
+        value.push_back(ch);
+        ++cursor;
+    }
+    return std::nullopt;
+}
+
 std::optional<long long> parseId(const httplib::Request &req) {
     if (req.matches.size() < 2) {
         return std::nullopt;
@@ -258,17 +403,15 @@ std::optional<std::string> ConfigService::extractJsonField(const std::string &bo
         return std::nullopt;
     }
 
-    auto start_quote = body.find('"', colon_pos);
-    if (start_quote == std::string::npos) {
+    size_t cursor = colon_pos + 1;
+    while (cursor < body.size() && std::isspace(static_cast<unsigned char>(body[cursor]))) {
+        ++cursor;
+    }
+    if (cursor >= body.size() || body[cursor] != '"') {
         return std::nullopt;
     }
 
-    auto end_quote = body.find('"', start_quote + 1);
-    if (end_quote == std::string::npos) {
-        return std::nullopt;
-    }
-
-    return body.substr(start_quote + 1, end_quote - start_quote - 1);
+    return parseJsonStringToken(body, cursor);
 }
 
 std::string ConfigService::escapeJson(const std::string &value) {
