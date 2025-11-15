@@ -63,15 +63,18 @@ echo "[setup-trdp] Selecting build configuration: ${MAKE_CONFIG_TARGET}"
 make "${MAKE_CONFIG_TARGET}"
 
 echo "[setup-trdp] Building TRDP libraries..."
-make -j"$(nproc)"
+make -j"$(nproc)" FULL_BUILD=1 libtrdp libtrdpap
 
-OUTPUT_LIB="$(find bld/output -type f -name 'libtrdp*.a' | head -n 1 || true)"
+OUTPUT_LIB="$(find bld/output -type f -name 'libtrdp.a' | head -n 1 || true)"
 if [[ -z "${OUTPUT_LIB}" ]]; then
     echo "Failed to locate libtrdp*.a in bld/output" >&2
     exit 1
 fi
 
 cp -R src/api/. "${INSTALL_PREFIX}/include/trdp/"
+if [[ -d src/vos/api ]]; then
+    cp -R src/vos/api/. "${INSTALL_PREFIX}/include/trdp/"
+fi
 cp "${OUTPUT_LIB}" "${INSTALL_PREFIX}/lib/"
 
 EXTRA_AP_LIB="$(find bld/output -type f -name 'libtrdpap*.a' | head -n 1 || true)"
