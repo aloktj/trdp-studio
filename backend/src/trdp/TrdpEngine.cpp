@@ -789,16 +789,6 @@ bool TrdpEngine::buildStateFromTrdpConfig(const config::TrdpXmlConfig &config_da
 }
 
 void TrdpEngine::rebuildStateFromConfig(const std::string &xml_content) {
-    std::optional<trdp::xml::ParsedTrdpConfig> parsed_config;
-    try {
-        trdp::xml::TrdpXmlLoader loader;
-        parsed_config = loader.parse(xml_content);
-    } catch (const trdp::xml::TrdpXmlLoaderError &ex) {
-        std::cerr << "TRDP XML parsing failed: " << ex.what() << std::endl;
-    } catch (const std::exception &ex) {
-        std::cerr << "Unexpected TRDP XML parsing error: " << ex.what() << std::endl;
-    }
-
     std::lock_guard<std::mutex> lock(state_mutex_);
     clearAllStateLocked();
     bool trdp_loaded = false;
