@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<trdp-config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xsi:noNamespaceSchemaLocation="trdp-config.xsd">
+  <device-configuration>
+    <device name="StudioDevice" description="TRDP configuration with incoming/outgoing PD & MD telegrams"
+            order-number="STUDIO-BIDIR" revision="1.0" />
+    <mem-block-list>
+      <mem-block name="system" size="65536" type="SYSTEM" behaviour="block" />
+      <mem-block name="pd" size="262144" type="PD" behaviour="block" />
+      <mem-block name="md" size="262144" type="MD" behaviour="block" />
+    </mem-block-list>
+    <dbg-config>
+      <log-level console="info" file="debug" />
+    </dbg-config>
+    <com-parameter-list>
+      <pd-com-parameter name="pdDefault" ttl="64" to-behavior="keep-last-value">
+        <send-parameter retries="2" timeout="1000000" />
+      </pd-com-parameter>
+      <md-com-parameter name="mdDefault" confirm-timeout="2000000" reply-timeout="2000000">
+        <send-parameter retries="2" timeout="2000000" />
+      </md-com-parameter>
+    </com-parameter-list>
+    <dataset-list>
+      <dataset name="TemperatureDataset" dataset-id="10">
+        <element name="temperature" type="real32" />
+        <element name="humidity" type="real32" />
+      </dataset>
+      <dataset name="CommandDataset" dataset-id="20">
+        <element name="command" type="string" size="32" />
+        <element name="value" type="uint32" />
+      </dataset>
+    </dataset-list>
+    <bus-interface-list>
+      <bus-interface name="loopback">
+        <process-config host-name="studio-device" leader-name="studio-leader" cycle-time="100000" />
+        <pd-defaults com-parameter="pdDefault" interval="100" redundancy="0" timeout="200000" />
+        <md-defaults com-parameter="mdDefault" timeout="4000000" />
+        <telegram-list>
+          <!-- PD outgoing example -->
+          <telegram name="TemperaturePublisher" type="pd" direction="publisher" com-id="6000" dataset-id="10" cycle="100">
+            <source endpoint="192.168.10.10:17224" />
+            <destination endpoint="239.10.10.1:17224" />
+            <payload>00000000</payload>
+          </telegram>
+          <!-- PD incoming example -->
+          <telegram name="TemperatureSubscriber" type="pd" direction="subscriber" com-id="6000" dataset-id="10" timeout="400">
+            <source endpoint="239.10.10.1:17224" />
+            <destination endpoint="192.168.10.10:17224" />
+          </telegram>
+          <!-- MD outgoing example -->
+          <telegram name="CommandRequester" type="md" direction="publisher" com-id="7000" dataset-id="20" timeout="5000">
+            <source endpoint="192.168.10.10:17225" />
+            <destination endpoint="192.168.10.20:17225" />
+          </telegram>
+          <!-- MD incoming example -->
+          <telegram name="CommandListener" type="md" direction="listener" com-id="7001" dataset-id="20" timeout="5000">
+            <source endpoint="192.168.10.20:17225" />
+            <destination endpoint="192.168.10.10:17225" />
+          </telegram>
+        </telegram-list>
+      </bus-interface>
+    </bus-interface-list>
+  </device-configuration>
+</trdp-config>
