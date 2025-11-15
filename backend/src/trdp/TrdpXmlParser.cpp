@@ -6,12 +6,23 @@
 #include <utility>
 #include <vector>
 
+#if defined(__has_include)
+#if __has_include(<trdp/tau_xml.h>)
+#define TRDP_HAS_TAU_XML 1
 #include <trdp/tau_xml.h>
+#else
+#define TRDP_HAS_TAU_XML 0
+#endif
+#else
+#define TRDP_HAS_TAU_XML 0
+#endif
 
 #include "trdp/XmlUtils.hpp"
 
 namespace trdp::config {
 namespace {
+
+#if TRDP_HAS_TAU_XML
 
 template <typename F>
 class ScopeExit {
@@ -215,6 +226,8 @@ std::vector<TrdpTelegramDefinition> convertExchangeToTelegrams(const TRDP_EXCHG_
     return telegrams;
 }
 
+#endif  // TRDP_HAS_TAU_XML
+
 bool hasTrdpMarkers(const std::string &xml_content) {
     const auto lowered = xml::toLowerCopy(xml_content);
     if (lowered.find("trdp-config.xsd") != std::string::npos) {
@@ -232,6 +245,8 @@ bool hasTrdpMarkers(const std::string &xml_content) {
 }
 
 }  // namespace
+
+#if TRDP_HAS_TAU_XML
 
 std::optional<TrdpXmlConfig> parseTrdpXmlConfig(const std::string &xml_content, std::string *error_out) {
     if (xml_content.empty()) {
@@ -332,6 +347,19 @@ std::optional<TrdpXmlConfig> parseTrdpXmlConfig(const std::string &xml_content, 
 
     return config;
 }
+
+#else
+
+std::optional<TrdpXmlConfig> parseTrdpXmlConfig(const std::string &xml_content, std::string *error_out) {
+    (void)xml_content;
+    if (error_out != nullptr) {
+        *error_out =
+            "TRDP XML parsing requires the proprietary TRDP SDK, which was not available when this build was produced.";
+    }
+    return std::nullopt;
+}
+
+#endif  // TRDP_HAS_TAU_XML
 
 bool looksLikeTrdpXml(const std::string &xml_content) {
     return hasTrdpMarkers(xml_content);
