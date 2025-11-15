@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<device xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="trdp-config.xsd"
+        host-name="studio-bidir" leader-name="studio-leader" type="demo">
+    <device-configuration memory-size="131072">
+        <mem-block-list>
+            <mem-block size="32" preallocate="1024" />
+            <mem-block size="72" preallocate="512" />
+            <mem-block size="128" preallocate="256" />
+        </mem-block-list>
+    </device-configuration>
+
+    <bus-interface-list>
+        <bus-interface network-id="1" name="loopback" host-ip="127.0.0.1">
+            <trdp-process blocking="no" cycle-time="100000" priority="80" traffic-shaping="on" />
+            <pd-com-parameter marshall="on" port="17224" qos="5" ttl="64" timeout-value="1000000" validity-behavior="zero" />
+            <md-com-parameter udp-port="17225" tcp-port="17225" confirm-timeout="1000000" connect-timeout="60000000"
+                              reply-timeout="5000000" marshall="off" protocol="UDP" qos="3" retries="2" ttl="64" />
+
+            <!-- PD publisher (outgoing table) -->
+            <telegram name="pdPublisher" direction="publisher" com-id="6100" data-set-id="900" com-parameter-id="1">
+                <pd-parameter cycle="200000" marshall="off" timeout="400000" validity-behavior="keep" />
+                <destination id="1" uri="239.1.1.10" />
+            </telegram>
+
+            <!-- PD subscriber (incoming table) -->
+            <telegram name="pdSubscriber" direction="subscriber" com-id="6101" data-set-id="901" com-parameter-id="1">
+                <pd-parameter cycle="200000" marshall="off" timeout="400000" validity-behavior="zero" />
+                <source id="1" uri="239.1.1.11" />
+            </telegram>
+
+            <!-- MD responder (outgoing table) -->
+            <telegram name="mdResponder" direction="responder" com-id="7100" data-set-id="920" com-parameter-id="2">
+                <md-parameter confirm-timeout="500000" connect-timeout="2000000" reply-timeout="1000000" retries="1" />
+                <destination id="1" uri="239.1.1.20" />
+            </telegram>
+
+            <!-- MD listener (incoming table) -->
+            <telegram name="mdListener" direction="listener" com-id="7101" data-set-id="921" com-parameter-id="2">
+                <md-parameter confirm-timeout="500000" connect-timeout="2000000" reply-timeout="1000000" retries="1" />
+                <source id="1" uri="239.1.1.21" />
+            </telegram>
+        </bus-interface>
+    </bus-interface-list>
+
+    <mapped-device-list>
+    </mapped-device-list>
+
+    <com-parameter-list>
+        <com-parameter id="1" qos="5" ttl="64" />
+        <com-parameter id="2" qos="3" ttl="64" />
+    </com-parameter-list>
+
+    <data-set-list>
+        <data-set name="PdPublishDataset" id="900">
+            <element name="temperature" type="REAL32" />
+            <element name="humidity" type="REAL32" />
+        </data-set>
+        <data-set name="PdSubscribeDataset" id="901">
+            <element name="velocity" type="REAL32" />
+            <element name="pressure" type="REAL32" />
+        </data-set>
+        <data-set name="MdResponderDataset" id="920">
+            <element name="command" type="UINT32" />
+            <element name="argument" type="UINT16" />
+        </data-set>
+        <data-set name="MdListenerDataset" id="921">
+            <element name="status" type="UINT16" />
+            <element name="message" type="STRING" size="32" />
+        </data-set>
+    </data-set-list>
+
+    <debug file-name="trdp-bidir.log" file-size="1000000" info="DTFC" level="I" />
+</device>

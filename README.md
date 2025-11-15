@@ -48,6 +48,10 @@ It represents a minimal yet fully valid device description (device + datasets + 
 backend can parse and validate TRDP content even on a clean checkout. Use this file when you need a known-good
 input for development, tests, or demos of the XML upload APIs.
 
+When you specifically need to exercise every PD/MD table in the UI (incoming + outgoing), load
+`config/bidirectional-trdp-config.xml`. That configuration defines one PD publisher, one PD subscriber, one MD
+publisher, and one MD listener so each direction bucket is populated immediately after import.
+
 
 ---
 
