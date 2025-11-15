@@ -44,6 +44,14 @@ std::string cStringOrEmpty(const CHAR8 *value) {
     return std::string(reinterpret_cast<const char *>(value));
 }
 
+template <size_t N>
+std::string cStringOrEmpty(const CHAR8 (*value)[N]) {
+    if (value == nullptr) {
+        return {};
+    }
+    return cStringOrEmpty(&(*value)[0]);
+}
+
 std::string firstUserLabel(const TRDP_EXCHG_PAR_T &entry) {
     if (entry.pDest != nullptr && entry.destCnt > 0U && entry.pDest[0].pUriUser != nullptr) {
         return cStringOrEmpty(entry.pDest[0].pUriUser);

@@ -9,40 +9,6 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 include(FetchContent)
 find_package(SQLite3 REQUIRED)
-find_package(TRDP REQUIRED)
-
-option(TRDP_AUTO_SETUP "Download and stage the TRDP stack during configure" OFF)
-set(TRDP_SETUP_PREFIX "${CMAKE_BINARY_DIR}/trdp-install" CACHE PATH
-    "Install prefix used when TRDP_AUTO_SETUP is enabled")
-set(TRDP_PLATFORM_CONFIG "LINUX_X86_64_config" CACHE STRING
-    "Upstream Makefile target that selects the TRDP platform configuration")
-
-if(TRDP_AUTO_SETUP)
-    set(_TRDP_SETUP_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/scripts/setup_trdp.sh")
-    if(NOT EXISTS "${_TRDP_SETUP_SCRIPT}")
-        message(FATAL_ERROR "TRDP_AUTO_SETUP is enabled but ${_TRDP_SETUP_SCRIPT} is missing")
-    endif()
-
-    if(NOT TRDP_ROOT)
-        set(TRDP_ROOT "${TRDP_SETUP_PREFIX}" CACHE PATH "Root directory of the TRDP installation" FORCE)
-    endif()
-
-    set(_TRDP_ARCHIVE "${TRDP_ROOT}/lib/libtrdp.a")
-    if(NOT EXISTS "${_TRDP_ARCHIVE}")
-        message(STATUS "Auto-installing TRDP into ${TRDP_ROOT}")
-        execute_process(
-            COMMAND "${_TRDP_SETUP_SCRIPT}" "${TRDP_ROOT}" "${TRDP_PLATFORM_CONFIG}"
-            RESULT_VARIABLE _TRDP_SETUP_RESULT
-        )
-        if(NOT _TRDP_SETUP_RESULT EQUAL 0)
-            message(FATAL_ERROR "TRDP auto setup failed with exit code ${_TRDP_SETUP_RESULT}")
-        endif()
-    else()
-        message(STATUS "Reusing existing TRDP install at ${TRDP_ROOT}")
-    endif()
-endif()
-
-find_package(TRDP REQUIRED)
 
 option(TRDP_AUTO_SETUP "Download and stage the TRDP stack during configure" OFF)
 set(TRDP_SETUP_PREFIX "${CMAKE_BINARY_DIR}/trdp-install" CACHE PATH
