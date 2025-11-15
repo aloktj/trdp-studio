@@ -174,6 +174,7 @@ void HttpRouter::registerNetworkConfigEndpoints(httplib::Server &server) {
             std::string payload = "{\"config\":" + serializeNetworkConfig(stored) + "}";
             res.status = 200;
             res.set_content(payload, "application/json");
+            config_service_.ensureTrdpEngineLoaded();
         } catch (const std::exception &ex) {
             res.status = 500;
             res.set_content(json::error(ex.what()), "application/json");

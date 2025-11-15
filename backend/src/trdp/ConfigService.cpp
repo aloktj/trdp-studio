@@ -1,5 +1,6 @@
 #include "trdp/ConfigService.hpp"
 
+#include <iostream>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -7,9 +8,11 @@
 
 #include "auth/AuthManager.hpp"
 #include "httplib.h"
+#include "network/NetworkConfigService.hpp"
 #include "trdp/PlanBuilder.hpp"
 #include "trdp/TrdpConfigService.hpp"
 #include "trdp/TrdpXmlParser.hpp"
+#include "trdp/TrdpEngine.hpp"
 
 namespace trdp::config {
 namespace {
@@ -25,8 +28,13 @@ std::optional<long long> parseId(const httplib::Request &req) {
 }
 }  // namespace
 
-ConfigService::ConfigService(auth::AuthManager &auth_manager, TrdpConfigService &config_service)
-    : auth_manager_(auth_manager), config_service_(config_service) {}
+ConfigService::ConfigService(auth::AuthManager &auth_manager, TrdpConfigService &config_service,
+                             network::NetworkConfigService &network_config_service,
+                             stack::TrdpEngine &trdp_engine)
+    : auth_manager_(auth_manager),
+      config_service_(config_service),
+      network_config_service_(network_config_service),
+      trdp_engine_(trdp_engine) {}
 
 void ConfigService::registerRoutes(httplib::Server &server) {
     server.Get("/api/trdp/configs", [this](const httplib::Request &req, httplib::Response &res) {
@@ -152,12 +160,39 @@ void ConfigService::handleActivateConfig(const httplib::Request &req, httplib::R
         }
 
         config_service_.setActiveConfig(*config_id);
+        loadConfigIntoEngine(*config);
         res.status = 200;
         res.set_content("{\"status\":\"activated\",\"config_id\":" + std::to_string(*config_id) + "}",
                         "application/json");
     } catch (const std::exception &ex) {
         res.status = 500;
         res.set_content(jsonError(ex.what()), "application/json");
+    }
+}
+
+bool ConfigService::ensureTrdpEngineLoaded() {
+    try {
+        auto active = config_service_.getActiveConfig();
+        if (!active) {
+            return false;
+        }
+        return loadConfigIntoEngine(*active);
+    } catch (const std::exception &ex) {
+        std::cerr << "Failed to load active TRDP configuration: " << ex.what() << std::endl;
+        return false;
+    }
+}
+
+bool ConfigService::loadConfigIntoEngine(const TrdpConfig &config) {
+    auto net_cfg = network_config_service_.loadConfig();
+    if (!net_cfg) {
+        return false;
+    }
+    try {
+        return trdp_engine_.loadConfiguration(config, *net_cfg);
+    } catch (const std::exception &ex) {
+        std::cerr << "Failed to load TRDP configuration into engine: " << ex.what() << std::endl;
+        return false;
     }
 }
 
