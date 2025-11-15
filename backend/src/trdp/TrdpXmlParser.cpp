@@ -1,5 +1,6 @@
 #include "trdp/TrdpXmlParser.hpp"
 
+#include <array>
 #include <cstdlib>
 #include <string>
 #include <utility>
@@ -216,9 +217,18 @@ std::vector<TrdpTelegramDefinition> convertExchangeToTelegrams(const TRDP_EXCHG_
 
 bool hasTrdpMarkers(const std::string &xml_content) {
     const auto lowered = xml::toLowerCopy(xml_content);
-    return lowered.find("<device-configuration") != std::string::npos ||
-           lowered.find("<bus-interface") != std::string::npos ||
-           lowered.find("<telegram") != std::string::npos;
+    if (lowered.find("trdp-config.xsd") != std::string::npos) {
+        return true;
+    }
+    static const std::array<const char *, 8> markers = {"<device ",          "<device-configuration", "<mem-block-list",
+                                                        "<bus-interface-list", "<bus-interface",        "<pd-com-parameter",
+                                                        "<md-com-parameter",  "<telegram"};
+    for (auto marker : markers) {
+        if (lowered.find(marker) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
 }
 
 }  // namespace
