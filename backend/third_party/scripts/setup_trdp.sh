@@ -34,9 +34,27 @@ trap 'rm -rf "${WORK_DIR}"' EXIT
 
 mkdir -p "${INSTALL_PREFIX}/include/trdp" "${INSTALL_PREFIX}/lib"
 
+declare -a REQUIRED_HEADERS=(
+    "trdp_if_light.h"
+    "tau_xml.h"
+    "vos_types.h"
+)
+
 if [[ -f "${INSTALL_PREFIX}/lib/libtrdp.a" ]]; then
-    echo "[setup-trdp] Existing libtrdp.a detected under ${INSTALL_PREFIX}; skipping rebuild."
-    exit 0
+    missing_header=""
+    for header in "${REQUIRED_HEADERS[@]}"; do
+        if [[ ! -f "${INSTALL_PREFIX}/include/trdp/${header}" ]]; then
+            missing_header="${header}"
+            break
+        fi
+    done
+
+    if [[ -z "${missing_header}" ]]; then
+        echo "[setup-trdp] Existing libtrdp.a detected under ${INSTALL_PREFIX}; skipping rebuild."
+        exit 0
+    fi
+
+    echo "[setup-trdp] libtrdp.a present but ${missing_header} is missing; restaging TRDP headers."
 fi
 
 command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 1; }
