@@ -116,6 +116,26 @@ std::optional<TrdpConfig> TrdpConfigService::getConfigById(long long id) {
     return config;
 }
 
+std::optional<TrdpConfig> TrdpConfigService::getActiveConfig() {
+    sqlite3_stmt *stmt = nullptr;
+    const char *sql =
+        "SELECT xc.id, xc.user_id, xc.name, xc.xml_content, xc.validation_status, xc.created_at "
+        "FROM active_config ac JOIN xml_configs xc ON ac.xml_config_id = xc.id WHERE ac.id = 1 LIMIT 1;";
+    if (sqlite3_prepare_v2(database_.handle(), sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error("failed to query active config");
+    }
+
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        return std::nullopt;
+    }
+
+    TrdpConfig config = rowToConfig(stmt);
+    sqlite3_finalize(stmt);
+    return config;
+}
+
 void TrdpConfigService::setActiveConfig(long long config_id) {
     sqlite3_stmt *stmt = nullptr;
     const char *sql =
