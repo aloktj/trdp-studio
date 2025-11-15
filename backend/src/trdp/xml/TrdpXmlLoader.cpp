@@ -54,6 +54,13 @@ std::vector<XmlElement> extractElements(const std::string &xml, const std::strin
     std::size_t pos = 0;
     while ((pos = xml.find(open, pos)) != std::string::npos) {
         const std::size_t head_start = pos + open.size();
+        if (head_start < xml.size()) {
+            const char boundary = xml[head_start];
+            if (!(std::isspace(static_cast<unsigned char>(boundary)) || boundary == '>' || boundary == '/')) {
+                pos = head_start;
+                continue;
+            }
+        }
         std::size_t closing = xml.find('>', head_start);
         if (closing == std::string::npos) {
             break;
