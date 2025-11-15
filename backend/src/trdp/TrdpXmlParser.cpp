@@ -18,9 +18,65 @@
 #endif
 
 #include "trdp/XmlUtils.hpp"
+#include "trdp/xml/TrdpXmlLoader.hpp"
 
 namespace trdp::config {
 namespace {
+
+TrdpTelegramType convertTelegramKind(xml::TelegramKind kind) {
+    return kind == xml::TelegramKind::kMd ? TrdpTelegramType::kMd : TrdpTelegramType::kPd;
+}
+
+TrdpTelegramDirection convertTelegramDirection(xml::TelegramKind kind, xml::TelegramDirection direction) {
+    if (kind == xml::TelegramKind::kMd) {
+        return direction == xml::TelegramDirection::kSubscriber ? TrdpTelegramDirection::kListener
+                                                                 : TrdpTelegramDirection::kResponder;
+    }
+    return direction == xml::TelegramDirection::kSubscriber ? TrdpTelegramDirection::kSubscriber
+                                                             : TrdpTelegramDirection::kPublisher;
+}
+
+std::optional<TrdpXmlConfig> parseWithFallbackLoader(const std::string &xml_content, std::string *error_out) {
+    try {
+        xml::TrdpXmlLoader loader;
+        auto parsed = loader.parse(xml_content);
+        TrdpXmlConfig config;
+        for (const auto &iface : parsed.interfaces) {
+            TrdpInterfaceDefinition iface_def;
+            iface_def.name = iface.name;
+            for (const auto &telegram : iface.telegrams) {
+                TrdpTelegramDefinition definition;
+                definition.type = convertTelegramKind(telegram.kind);
+                definition.direction = convertTelegramDirection(telegram.kind, telegram.direction);
+                definition.name = telegram.name;
+                definition.com_id = telegram.com_id;
+                definition.cycle_time_ms = telegram.cycle_time_ms;
+                if (telegram.dataset_id > 0) {
+                    definition.dataset = std::to_string(telegram.dataset_id);
+                }
+                definition.source = telegram.source.endpoint;
+                definition.destination = telegram.destination.endpoint;
+                definition.payload = telegram.default_payload;
+                iface_def.telegrams.push_back(std::move(definition));
+            }
+            if (!iface_def.telegrams.empty()) {
+                config.interfaces.push_back(std::move(iface_def));
+            }
+        }
+        if (config.interfaces.empty()) {
+            if (error_out != nullptr) {
+                *error_out = "No TRDP telegram definitions were found in the XML document";
+            }
+            return std::nullopt;
+        }
+        return config;
+    } catch (const xml::TrdpXmlLoaderError &ex) {
+        if (error_out != nullptr) {
+            *error_out = ex.what();
+        }
+        return std::nullopt;
+    }
+}
 
 #if TRDP_HAS_TAU_XML
 
@@ -226,36 +282,7 @@ std::vector<TrdpTelegramDefinition> convertExchangeToTelegrams(const TRDP_EXCHG_
     return telegrams;
 }
 
-#endif  // TRDP_HAS_TAU_XML
-
-bool hasTrdpMarkers(const std::string &xml_content) {
-    const auto lowered = xml::toLowerCopy(xml_content);
-    if (lowered.find("trdp-config.xsd") != std::string::npos) {
-        return true;
-    }
-    static const std::array<const char *, 8> markers = {"<device ",          "<device-configuration", "<mem-block-list",
-                                                        "<bus-interface-list", "<bus-interface",        "<pd-com-parameter",
-                                                        "<md-com-parameter",  "<telegram"};
-    for (auto marker : markers) {
-        if (lowered.find(marker) != std::string::npos) {
-            return true;
-        }
-    }
-    return false;
-}
-
-}  // namespace
-
-#if TRDP_HAS_TAU_XML
-
-std::optional<TrdpXmlConfig> parseTrdpXmlConfig(const std::string &xml_content, std::string *error_out) {
-    if (xml_content.empty()) {
-        if (error_out != nullptr) {
-            *error_out = "XML content is empty";
-        }
-        return std::nullopt;
-    }
-
+std::optional<TrdpXmlConfig> parseWithTauXml(const std::string &xml_content, std::string *error_out) {
     std::vector<char> xml_buffer(xml_content.begin(), xml_content.end());
     xml_buffer.push_back('\0');
 
@@ -348,18 +375,50 @@ std::optional<TrdpXmlConfig> parseTrdpXmlConfig(const std::string &xml_content, 
     return config;
 }
 
-#else
+#endif  // TRDP_HAS_TAU_XML
 
-std::optional<TrdpXmlConfig> parseTrdpXmlConfig(const std::string &xml_content, std::string *error_out) {
-    (void)xml_content;
-    if (error_out != nullptr) {
-        *error_out =
-            "TRDP XML parsing requires the proprietary TRDP SDK, which was not available when this build was produced.";
+bool hasTrdpMarkers(const std::string &xml_content) {
+    const auto lowered = xml::toLowerCopy(xml_content);
+    if (lowered.find("trdp-config.xsd") != std::string::npos) {
+        return true;
     }
-    return std::nullopt;
+    static const std::array<const char *, 8> markers = {"<device ",          "<device-configuration", "<mem-block-list",
+                                                        "<bus-interface-list", "<bus-interface",        "<pd-com-parameter",
+                                                        "<md-com-parameter",  "<telegram"};
+    for (auto marker : markers) {
+        if (lowered.find(marker) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
 }
 
-#endif  // TRDP_HAS_TAU_XML
+}  // namespace
+
+std::optional<TrdpXmlConfig> parseTrdpXmlConfig(const std::string &xml_content, std::string *error_out) {
+    if (xml_content.empty()) {
+        if (error_out != nullptr) {
+            *error_out = "XML content is empty";
+        }
+        return std::nullopt;
+    }
+
+#if TRDP_HAS_TAU_XML
+    std::string tau_error;
+    if (auto parsed = parseWithTauXml(xml_content, &tau_error)) {
+        return parsed;
+    }
+    if (auto fallback = parseWithFallbackLoader(xml_content, error_out)) {
+        return fallback;
+    }
+    if (error_out != nullptr && !tau_error.empty() && error_out->empty()) {
+        *error_out = tau_error;
+    }
+    return std::nullopt;
+#else
+    return parseWithFallbackLoader(xml_content, error_out);
+#endif
+}
 
 bool looksLikeTrdpXml(const std::string &xml_content) {
     return hasTrdpMarkers(xml_content);
