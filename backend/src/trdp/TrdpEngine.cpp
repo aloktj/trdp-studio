@@ -2,13 +2,11 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
-#include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
@@ -33,108 +31,16 @@
 #endif
 
 #include "db/Database.hpp"
-#include "trdp/xml/TrdpXmlLoader.hpp"
+#include "trdp/TrdpXmlParser.hpp"
+#include "trdp/XmlUtils.hpp"
 
-namespace {
-
-std::string trimCopy(const std::string &value) {
-    auto begin = value.find_first_not_of(" \t\n\r");
-    if (begin == std::string::npos) {
-        return "";
-    }
-    auto end = value.find_last_not_of(" \t\n\r");
-    return value.substr(begin, end - begin + 1);
-}
-
-std::string toLowerCopy(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
-    return value;
-}
-
-int safeStoi(const std::string &value, int fallback = 0) {
-    try {
-        return std::stoi(value);
-    } catch (...) {
-        return fallback;
-    }
-}
-
-struct XmlElement {
-    std::unordered_map<std::string, std::string> attributes;
-    std::string body;
-};
-
-std::unordered_map<std::string, std::string> parseAttributes(const std::string &raw) {
-    std::unordered_map<std::string, std::string> result;
-    static const std::regex attr_regex{R"(([A-Za-z0-9_:\-\.]+)\s*=\s*\"([^\"]*)\")"};
-    auto begin = std::sregex_iterator(raw.begin(), raw.end(), attr_regex);
-    auto end = std::sregex_iterator();
-    for (auto it = begin; it != end; ++it) {
-        result[it->str(1)] = it->str(2);
-    }
-    return result;
-}
-
-std::vector<XmlElement> extractElements(const std::string &xml, const std::string &tag) {
-    std::vector<XmlElement> elements;
-    const std::string open = "<" + tag;
-    const std::string close = "</" + tag + ">";
-    std::size_t pos = 0;
-    while ((pos = xml.find(open, pos)) != std::string::npos) {
-        const std::size_t head_start = pos + open.size();
-        std::size_t closing = xml.find('>', head_start);
-        if (closing == std::string::npos) {
-            break;
-        }
-        bool self_closing = closing > head_start && xml[closing - 1] == '/';
-        std::string attr_segment = xml.substr(head_start, closing - head_start);
-        if (self_closing && !attr_segment.empty()) {
-            attr_segment.pop_back();
-        }
-        XmlElement element;
-        element.attributes = parseAttributes(attr_segment);
-        if (!self_closing) {
-            auto close_pos = xml.find(close, closing + 1);
-            if (close_pos == std::string::npos) {
-                break;
-            }
-            element.body = xml.substr(closing + 1, close_pos - (closing + 1));
-            pos = close_pos + close.size();
-        } else {
-            pos = closing + 1;
-        }
-        elements.push_back(std::move(element));
-    }
-    return elements;
-}
-
-std::vector<uint8_t> parseHexPayload(const std::string &raw) {
-    std::string filtered;
-    filtered.reserve(raw.size());
-    for (char ch : raw) {
-        if (std::isxdigit(static_cast<unsigned char>(ch))) {
-            filtered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
-        }
-    }
-    if (filtered.empty()) {
-        return {};
-    }
-    if (filtered.size() % 2 != 0U) {
-        filtered.insert(filtered.begin(), '0');
-    }
-    std::vector<uint8_t> payload;
-    payload.reserve(filtered.size() / 2);
-    for (std::size_t i = 0; i < filtered.size(); i += 2) {
-        auto byte_str = filtered.substr(i, 2);
-        uint8_t value = static_cast<uint8_t>(std::stoi(byte_str, nullptr, 16));
-        payload.push_back(value);
-    }
-    return payload;
-}
-
-}  // namespace
+using trdp::config::TrdpTelegramDirection;
+using trdp::config::TrdpTelegramType;
+using trdp::xml::extractElements;
+using trdp::xml::parseHexPayload;
+using trdp::xml::safeStoi;
+using trdp::xml::toLowerCopy;
+using trdp::xml::trimCopy;
 
 namespace trdp::stack {
 
@@ -809,6 +715,78 @@ void TrdpEngine::teardownStackLocked() {
     stack_ready_ = false;
 }
 
+bool TrdpEngine::buildStateFromTrdpConfig(const config::TrdpXmlConfig &config_data) {
+    bool added = false;
+    for (const auto &iface : config_data.interfaces) {
+        for (const auto &telegram : iface.telegrams) {
+            if (telegram.type == TrdpTelegramType::kPd) {
+                int assigned_id = telegram.com_id > 0 ? telegram.com_id : next_pd_id_++;
+                if (telegram.com_id > 0 && assigned_id >= next_pd_id_) {
+                    next_pd_id_ = assigned_id + 1;
+                }
+                PdMessage message;
+                message.id = assigned_id;
+                message.name = !telegram.name.empty() ? telegram.name : "PD-" + std::to_string(message.id);
+                message.cycle_time_ms = telegram.cycle_time_ms;
+                message.payload = telegram.payload;
+                message.timestamp = nowIso8601();
+
+                auto runtime = std::make_shared<PdRuntimeState>();
+                runtime->engine = this;
+                runtime->id = message.id;
+                runtime->name = message.name;
+                runtime->is_outgoing =
+                    telegram.direction == TrdpTelegramDirection::kPublisher ||
+                    telegram.direction == TrdpTelegramDirection::kResponder;
+                runtime->cycle_ms = telegram.cycle_time_ms > 0 ? telegram.cycle_time_ms : telegram.timeout_ms;
+                runtime->destination = sanitizeEndpoint(telegram.destination);
+                runtime->source = sanitizeEndpoint(telegram.source);
+                runtime->payload = telegram.payload;
+                runtime->next_cycle = std::chrono::steady_clock::now();
+
+                if (runtime->destination.empty() && network_config_) {
+                    runtime->destination = network_config_->local_ip + ":" +
+                                           std::to_string(network_config_->pd_port);
+                }
+                if (runtime->source.empty() && network_config_) {
+                    runtime->source = network_config_->local_ip + ":" +
+                                      std::to_string(network_config_->pd_port);
+                }
+
+                pd_runtime_[runtime->id] = runtime;
+                if (runtime->is_outgoing) {
+                    outgoing_pd_index_[message.id] = outgoing_pd_.size();
+                    outgoing_pd_.push_back(message);
+                } else {
+                    incoming_pd_index_[message.id] = incoming_pd_.size();
+                    incoming_pd_.push_back(message);
+                }
+                added = true;
+            } else {
+                auto runtime = std::make_shared<MdRuntimeState>();
+                runtime->engine = this;
+                runtime->runtime_id = next_md_runtime_id_++;
+                runtime->name = !telegram.name.empty() ? telegram.name :
+                                                          "MD-" + std::to_string(runtime->runtime_id);
+                runtime->destination = sanitizeEndpoint(telegram.destination);
+                runtime->source = sanitizeEndpoint(telegram.source);
+                runtime->last_payload = telegram.payload;
+                runtime->last_message_id = telegram.com_id;
+                if (runtime->destination.empty() && network_config_) {
+                    runtime->destination = network_config_->local_ip + ":" +
+                                           std::to_string(network_config_->md_port);
+                }
+                if (runtime->source.empty() && network_config_) {
+                    runtime->source = network_config_->local_ip + ":" +
+                                      std::to_string(network_config_->md_port);
+                }
+                md_runtime_[runtime->runtime_id] = runtime;
+                added = true;
+            }
+        }
+    }
+    return added;
+}
 
 void TrdpEngine::rebuildStateFromConfig(const std::string &xml_content) {
     std::optional<trdp::xml::ParsedTrdpConfig> parsed_config;
@@ -823,88 +801,18 @@ void TrdpEngine::rebuildStateFromConfig(const std::string &xml_content) {
 
     std::lock_guard<std::mutex> lock(state_mutex_);
     clearAllStateLocked();
-
-    if (parsed_config.has_value()) {
-        const uint16_t default_pd_port = network_config_ && network_config_->pd_port > 0
-                                             ? static_cast<uint16_t>(network_config_->pd_port)
-                                             : static_cast<uint16_t>(17224);
-        const uint16_t default_md_port = network_config_ && network_config_->md_port > 0
-                                             ? static_cast<uint16_t>(network_config_->md_port)
-                                             : static_cast<uint16_t>(17225);
-        const auto local_pd_endpoint = network_config_
-                                           ? sanitizeEndpoint(network_config_->local_ip + ":" +
-                                                              std::to_string(default_pd_port))
-                                           : std::string();
-        const auto local_md_endpoint = network_config_
-                                           ? sanitizeEndpoint(network_config_->local_ip + ":" +
-                                                              std::to_string(default_md_port))
-                                           : std::string();
-
-        auto ensure_pd_id = [this](int com_id) {
-            if (com_id > 0) {
-                next_pd_id_ = std::max(next_pd_id_, com_id + 1);
-                return com_id;
-            }
-            return next_pd_id_++;
-        };
-
-        for (const auto &iface : parsed_config->interfaces) {
-            for (const auto &telegram : iface.telegrams) {
-                if (telegram.kind == trdp::xml::TelegramKind::kPd) {
-                    const bool is_outgoing = telegram.direction == trdp::xml::TelegramDirection::kPublisher;
-                    PdMessage message;
-                    message.id = ensure_pd_id(telegram.com_id);
-                    message.name = !telegram.name.empty() ? telegram.name : "PD-" + std::to_string(message.id);
-                    message.cycle_time_ms = telegram.cycle_time_ms;
-                    message.payload = telegram.default_payload;
-                    message.timestamp = nowIso8601();
-
-                    auto runtime = std::make_shared<PdRuntimeState>();
-                    runtime->engine = this;
-                    runtime->id = message.id;
-                    runtime->name = message.name;
-                    runtime->is_outgoing = is_outgoing;
-                    runtime->cycle_ms = message.cycle_time_ms;
-                    runtime->payload = message.payload;
-                    runtime->next_cycle = std::chrono::steady_clock::now();
-                    runtime->source = telegram.source.endpoint.empty()
-                                           ? local_pd_endpoint
-                                           : sanitizeEndpoint(telegram.source.endpoint);
-                    runtime->destination = telegram.destination.endpoint.empty()
-                                               ? local_pd_endpoint
-                                               : sanitizeEndpoint(telegram.destination.endpoint);
-                    if (runtime->destination.empty()) {
-                        runtime->destination = runtime->source;
-                    }
-                    pd_runtime_[message.id] = runtime;
-                    if (is_outgoing) {
-                        outgoing_pd_index_[message.id] = outgoing_pd_.size();
-                        outgoing_pd_.push_back(message);
-                    } else {
-                        incoming_pd_index_[message.id] = incoming_pd_.size();
-                        incoming_pd_.push_back(message);
-                    }
-                } else {
-                    auto runtime = std::make_shared<MdRuntimeState>();
-                    runtime->engine = this;
-                    runtime->runtime_id = next_md_runtime_id_++;
-                    runtime->name = !telegram.name.empty() ? telegram.name :
-                                                            "MD-" + std::to_string(runtime->runtime_id);
-                    runtime->source = telegram.source.endpoint.empty()
-                                           ? local_md_endpoint
-                                           : sanitizeEndpoint(telegram.source.endpoint);
-                    runtime->destination = telegram.destination.endpoint.empty()
-                                               ? local_md_endpoint
-                                               : sanitizeEndpoint(telegram.destination.endpoint);
-                    runtime->last_message_id = telegram.com_id;
-                    md_runtime_[runtime->runtime_id] = runtime;
-                }
-            }
+    bool trdp_loaded = false;
+    if (config::looksLikeTrdpXml(xml_content)) {
+        std::string error;
+        if (auto parsed = config::parseTrdpXmlConfig(xml_content, &error)) {
+            trdp_loaded = buildStateFromTrdpConfig(*parsed);
+        } else if (!error.empty()) {
+            std::cerr << "TRDP XML parse error: " << error << std::endl;
         }
+    }
+    if (trdp_loaded) {
         return;
     }
-
-    // Fallback to legacy inline parsing if structured parsing failed entirely.
     const auto pd_elements = extractElements(xml_content, "pd");
     for (const auto &element : pd_elements) {
         PdMessage message;

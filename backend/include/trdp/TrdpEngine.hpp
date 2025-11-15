@@ -17,6 +17,10 @@ namespace trdp::db {
 class Database;
 }
 
+namespace trdp::config {
+struct TrdpXmlConfig;
+}
+
 namespace trdp::stack {
 
 struct PdMessage {
@@ -83,6 +87,7 @@ private:
     void stopWorker();
     void clearAllStateLocked();
     static std::string nowIso8601();
+    bool buildStateFromTrdpConfig(const config::TrdpXmlConfig &config);
 
     bool running_ {false};
     std::atomic<bool> stack_ready_ {false};
