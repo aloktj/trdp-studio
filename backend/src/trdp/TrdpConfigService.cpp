@@ -1,5 +1,7 @@
 #include "trdp/TrdpConfigService.hpp"
 
+#include "trdp/TrdpXmlParser.hpp"
+
 #include <sqlite3.h>
 
 #include <stdexcept>
@@ -130,8 +132,19 @@ void TrdpConfigService::setActiveConfig(long long config_id) {
 }
 
 std::string TrdpConfigService::validateXml(const std::string &xml_content) {
-    (void)xml_content;
-    // TODO: call real TRDP validation
+    if (xml_content.empty()) {
+        return "XML document is empty";
+    }
+    if (config::looksLikeTrdpXml(xml_content)) {
+        std::string error;
+        if (!config::parseTrdpXmlConfig(xml_content, &error)) {
+            return error.empty() ? "Failed to parse TRDP XML" : error;
+        }
+        return "PASS";
+    }
+    if (xml_content.find("<pd") == std::string::npos && xml_content.find("<md") == std::string::npos) {
+        return "Document must declare <pd>/<md> blocks or TRDP <bus-interface> entries";
+    }
     return "PASS";
 }
 
