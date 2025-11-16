@@ -68,6 +68,7 @@ set(TRDP_APP_SOURCES
     src/trdp/TrdpConfigService.cpp
     src/trdp/PlanBuilder.cpp
     src/trdp/TrdpXmlParser.cpp
+    src/trdp/xml/TrdpXmlLoader.cpp
     src/trdp/XmlUtils.cpp
     src/network/NetworkConfigService.cpp
     src/util/Logger.cpp
